@@ -5,8 +5,10 @@ from pydantic import BaseModel
 class Question(BaseModel):
     question: str
     options: list[str]  # đúng 4 đáp án
-    correct_index: int  # 0..3
+    # evidence đứng trước correct_index để model tìm bằng chứng rồi mới chốt đáp án.
+    evidence: str = ""  # câu trích nguyên văn từ văn bản nguồn
     explanation: str
+    correct_index: int  # 0..3
 
 
 class Quiz(BaseModel):

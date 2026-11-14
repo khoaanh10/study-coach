@@ -96,6 +96,38 @@ def tc12(buf):
     show_quiz(buf, generate_quiz(long_text, 3, "Trung bình"))
 
 
+def tc13(buf):
+    text = RAG.decode("utf-8")
+    for level in ("Dễ", "Khó"):
+        buf.write(f"--- Mức {level} ---" + chr(10))
+        for q in generate_quiz(text, 5, level).questions:
+            buf.write(f"- {q.question}" + chr(10))
+
+
+SHORT = (
+    "RAG (Retrieval-Augmented Generation) là kỹ thuật cho mô hình ngôn ngữ trả lời dựa trên tài liệu bên ngoài. "
+    "Hệ thống trước tiên tìm các đoạn tài liệu liên quan đến câu hỏi, sau đó đưa các đoạn đó vào prompt để mô hình "
+    "trả lời. Tài liệu dài được chia thành các đoạn nhỏ gọi là chunk. Chunk quá lớn làm việc truy xuất kém chính xác, "
+    "còn chunk quá nhỏ làm mất ngữ cảnh. Các chunk thường gối lên nhau một phần, gọi là overlap. Embedding là cách "
+    "biến một đoạn văn bản thành một vector số, sao cho các đoạn có ý nghĩa gần nhau thì vector gần nhau. "
+    "Độ gần thường được đo bằng cosine similarity."
+)
+
+
+def bug01(buf):
+    """Hồi quy BUG-01: 10 lần tạo quiz trên đoạn văn từng gây lỗi, đếm câu gán nhầm hậu quả."""
+    bad = 0
+    for i in range(10):
+        quiz = generate_quiz(SHORT, 5, "Trung bình")
+        buf.write(f"Lần {i + 1}: {len(quiz.questions)} câu" + chr(10))
+        for q in quiz.questions:
+            ans = q.options[q.correct_index]
+            wrong = "lớn" in q.question and "nhỏ" not in q.question and "ngữ cảnh" in ans
+            bad += wrong
+            buf.write(f"  {'SAI ' if wrong else ''}{q.question} => {ans}" + chr(10))
+    buf.write(f"{chr(10)}Số câu gán 'mất ngữ cảnh' cho chunk quá lớn: {bad}/10 lần chạy" + chr(10))
+
+
 def run_with_env(buf, env_extra):
     code = (
         "from core.quiz import generate_quiz\n"
@@ -134,5 +166,7 @@ if __name__ == "__main__":
     record("TC-10", "File sai định dạng (mức hàm)", tc10)
     record("TC-11", "PDF không có lớp chữ (mức hàm)", tc11)
     record("TC-12", "Văn bản rất dài (mức hàm)", tc12)
+    record("TC-13", "Độ khó Dễ so với Khó (mức hàm)", tc13)
+    record("BUG-01", "Hồi quy đáp án lệch văn bản nguồn", bug01)
     record("TC-17", "Thiếu API key", tc17)
     record("TC-18", "Sai API key", tc18)

@@ -4,7 +4,15 @@ Mọi nơi khác gọi qua đây, để sau này dễ thêm model khác (ví d�
 """
 from typing import TypeVar
 
-from openai import OpenAI, OpenAIError
+from openai import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    AuthenticationError,
+    OpenAI,
+    OpenAIError,
+    RateLimitError,
+)
 from pydantic import BaseModel
 
 import config
@@ -14,6 +22,21 @@ T = TypeVar("T", bound=BaseModel)
 
 class LLMError(Exception):
     """Lỗi khi gọi LLM, thông báo đã viết sẵn để hiện cho người dùng."""
+
+
+def friendly_error(e: Exception) -> str:
+    """Đổi lỗi của OpenAI thành thông báo tiếng Việt, không lộ chi tiết kỹ thuật."""
+    if isinstance(e, AuthenticationError):
+        return "API key không hợp lệ hoặc đã hết hạn. Kiểm tra OPENAI_API_KEY trong file .env."
+    if isinstance(e, RateLimitError):
+        return "Đã vượt giới hạn gọi API hoặc hết ngân sách của key. Chờ một lúc rồi thử lại."
+    if isinstance(e, APITimeoutError):
+        return "Máy chủ AI phản hồi quá lâu. Thử lại, hoặc giảm số câu và độ dài văn bản."
+    if isinstance(e, APIConnectionError):
+        return "Không kết nối được tới máy chủ AI. Kiểm tra mạng và OPENAI_BASE_URL trong file .env."
+    if isinstance(e, APIStatusError):
+        return f"Máy chủ AI báo lỗi (mã {e.status_code}). Thử lại sau, hoặc đổi model."
+    return "Gọi máy chủ AI thất bại. Thử lại sau."
 
 
 def get_client() -> OpenAI:
@@ -42,11 +65,11 @@ def complete_structured(
             temperature=temperature,
         )
     except OpenAIError as e:
-        raise LLMError(f"Gọi OpenAI thất bại: {e}") from e
+        raise LLMError(friendly_error(e)) from e
 
     message = resp.choices[0].message
     if getattr(message, "refusal", None):
-        raise LLMError(f"Model từ chối trả lời: {message.refusal}")
+        raise LLMError("Model từ chối xử lý nội dung này. Thử với văn bản khác.")
     if message.parsed is None:
         raise LLMError("Model không trả về dữ liệu đúng định dạng.")
     return message.parsed
