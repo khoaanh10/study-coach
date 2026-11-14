@@ -128,6 +128,26 @@ def bug01(buf):
     buf.write(f"{chr(10)}Số câu gán 'mất ngữ cảnh' cho chunk quá lớn: {bad}/10 lần chạy" + chr(10))
 
 
+NONSENSE = {
+    "Gõ bừa một chuỗi lặp": "asdasdasd " * 20,
+    "Gõ bừa bàn phím": "asdf qwer uiop zxcv hjkl bnm fgh tyu rew poi lkj mnb vcx dsa ewq iuy tre oiu kjh gfd nbv cxz yui opa",
+    "Từ thật xếp lộn xộn": "bàn xanh chạy hôm qua ngủ cái con mèo số bảy trời ghế uống nhanh lá cây điện thoại bay tím và nhưng hoặc cửa sổ ăn sách đỏ chậm mưa bút hát núi cười lạnh xe muối giấy nhảy",
+    "Lorem ipsum": "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris.",
+    "Tán gẫu không có thông tin": "hôm nay trời đẹp quá ha ha ha tôi không biết viết gì cả nên cứ gõ đại vài chữ cho đủ dài thôi chứ thật ra chẳng có nội dung gì hết á trời ơi buồn ngủ ghê luôn đó nha mọi người ơi",
+    "Ghi chú học tập viết tắt (phải ra quiz)": "ghi chú bài hôm nay: embedding = biến text thành vector, vector gần nhau thì nghĩa gần nhau. đo bằng cosine. chunk to quá thì tìm kém chính xác, nhỏ quá mất ngữ cảnh. overlap để khỏi cắt ý. nhớ lưu metadata tên file + số trang",
+    "Tài liệu tiếng Anh (phải ra quiz)": "Photosynthesis is the process by which green plants use sunlight to make food from carbon dioxide and water. It takes place in the chloroplasts, which contain chlorophyll. Oxygen is released as a by-product.",
+}
+
+
+def tc19(buf):
+    for name, text in NONSENSE.items():
+        try:
+            quiz = generate_quiz(text, 3, "Trung bình")
+            buf.write(f"{name}: RA QUIZ {len(quiz.questions)} câu, ví dụ: {quiz.questions[0].question}" + chr(10))
+        except Exception as e:
+            buf.write(f"{name}: TỪ CHỐI ({e})" + chr(10))
+
+
 def run_with_env(buf, env_extra):
     code = (
         "from core.quiz import generate_quiz\n"
@@ -168,5 +188,6 @@ if __name__ == "__main__":
     record("TC-12", "Văn bản rất dài (mức hàm)", tc12)
     record("TC-13", "Độ khó Dễ so với Khó (mức hàm)", tc13)
     record("BUG-01", "Hồi quy đáp án lệch văn bản nguồn", bug01)
+    record("TC-19", "Văn bản vô nghĩa hoặc không có kiến thức (mức hàm)", tc19)
     record("TC-17", "Thiếu API key", tc17)
     record("TC-18", "Sai API key", tc18)

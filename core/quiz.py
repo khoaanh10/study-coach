@@ -16,8 +16,36 @@ SYSTEM_PROMPT = (
     "của đáp án khớp với evidence. "
     "Cẩn thận với các ý đối lập trong văn bản (ví dụ 'quá lớn' và 'quá nhỏ', 'trước' và 'sau'): "
     "không được gán nguyên nhân hay hậu quả của ý này cho ý kia. "
-    "Chỉ hỏi 'vì sao' khi văn bản có nêu rõ lý do; đáp án đúng không được lặp lại nguyên câu hỏi."
+    "Chỉ hỏi 'vì sao' khi văn bản có nêu rõ lý do; đáp án đúng không được lặp lại nguyên câu hỏi. "
+    "Nếu văn bản vô nghĩa (ký tự gõ bừa, chuỗi lặp lại) hoặc không chứa thông tin, kiến thức nào "
+    "để hỏi, trả về questions là danh sách rỗng. Không bịa câu hỏi, không hỏi về hình thức của "
+    "văn bản (ký tự nào xuất hiện, lặp bao nhiêu lần)."
 )
+
+NO_CONTENT_MESSAGE = (
+    "Văn bản này không có nội dung kiến thức rõ ràng để ra câu hỏi. "
+    "Hãy dán một đoạn tài liệu, bài học hoặc ghi chú có ý nghĩa."
+)
+
+_VOWELS = set("aeiouyàáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵ")
+
+
+def _looks_meaningless(text: str) -> bool:
+    """Chặn sớm văn bản gõ bừa mà không tốn lần gọi API nào.
+
+    Chỉ bắt các trường hợp rõ ràng; trường hợp khó hơn do model và bước soát đáp án xử lý.
+    """
+    letters = [c for c in text if c.isalpha()]
+    latin = sum(ord(c) < 0x250 or 0x1EA0 <= ord(c) <= 0x1EFF for c in letters)
+    if letters and latin < len(letters) * 0.5:
+        return False  # chữ không phải Latin (Nhật, Trung, Hàn...): các phép đo dưới đây không áp dụng
+    words = [w for w in text.lower().split() if any(c.isalpha() for c in w)]
+    if len(words) < 15 or len(set(words)) < 10:
+        return True  # quá ít từ, hoặc vài từ lặp đi lặp lại
+    if max(len(w) for w in words) > 40 and sum(len(w) > 25 for w in words) > len(words) * 0.2:
+        return True  # nhiều "từ" dài bất thường
+    with_vowel = sum(any(c in _VOWELS for c in w) for w in words)
+    return with_vowel < len(words) * 0.7
 
 DIFFICULTY_HINTS = {
     "Dễ": (
@@ -63,6 +91,8 @@ def generate_quiz(
     if len(text) < 100:
         raise LLMError("Văn bản quá ngắn để ra quiz (cần ít nhất khoảng 100 ký tự).")
     text = text[: config.MAX_INPUT_CHARS]
+    if _looks_meaningless(text) or not _has_knowledge(text, model):
+        raise LLMError(NO_CONTENT_MESSAGE)
 
     user_prompt = (
         # Xin dư 2 câu để còn câu thay thế khi có câu bị loại ở bước kiểm tra.
@@ -76,9 +106,11 @@ def generate_quiz(
 
     source = _norm(text)
     good: list[Question] = []  # qua cả hai bước kiểm tra, gom qua các lần gọi
-    rejected: list[Question] = []
     for _ in range(max_attempts):
         quiz = complete_structured(messages, Quiz, model=model, temperature=0.2)
+        if not quiz.questions:
+            # Model cho rằng văn bản không có gì để hỏi; không gọi lại để ép ra câu hỏi.
+            break
         valid = [q for q in quiz.questions if _is_valid(q)]
         if not valid:
             continue
@@ -90,16 +122,41 @@ def generate_quiz(
                 if _norm(q.question) not in seen:
                     seen.add(_norm(q.question))
                     good.append(q)
-            else:
-                rejected.append(q)
         if len(good) >= n:
             break
-    # Thà ra ít câu hơn yêu cầu còn hơn đưa câu có đáp án đáng ngờ. Chỉ khi không có
-    # câu nào qua kiểm tra mới dùng tạm câu bị loại để người dùng vẫn có quiz.
-    chosen = good or rejected
-    if not chosen:
-        raise LLMError("Không tạo được câu hỏi hợp lệ. Thử lại hoặc dùng văn bản dài hơn.")
-    return Quiz(questions=chosen[:n])
+    # Thà ra ít câu hơn yêu cầu, hoặc không ra quiz, còn hơn đưa câu có đáp án đáng ngờ:
+    # câu bị loại không bao giờ được dùng để lấp chỗ trống.
+    if not good:
+        raise LLMError(NO_CONTENT_MESSAGE)
+    return Quiz(questions=good[:n])
+
+
+class _Gate(BaseModel):
+    reason: str  # lập luận ngắn, viết trước khi kết luận
+    has_knowledge: bool
+
+
+GATE_PROMPT = (
+    "Bạn kiểm tra đầu vào cho một công cụ ra đề trắc nghiệm ôn tập. Đọc VĂN BẢN và quyết định nó có "
+    "phải là tài liệu chứa thông tin, kiến thức để học và ra câu hỏi hay không. "
+    "has_knowledge=true khi văn bản trình bày sự kiện, khái niệm, quy trình, số liệu hoặc lập luận "
+    "(bài học, ghi chú, bài báo, tài liệu kỹ thuật, kể cả viết chưa trau chuốt). "
+    "has_knowledge=false khi văn bản là: ký tự gõ bừa; các từ ngẫu nhiên không ghép thành câu có nghĩa; "
+    "văn bản giữ chỗ như lorem ipsum; lời tán gẫu, than thở, chào hỏi không có thông tin gì để học. "
+    "Viết reason một câu rồi mới đặt has_knowledge."
+)
+
+
+def _has_knowledge(text: str, model: str | None) -> bool:
+    """Hỏi model xem văn bản có phải tài liệu để học không. Lỗi thì cho qua, không chặn người dùng."""
+    messages = [
+        {"role": "system", "content": GATE_PROMPT},
+        {"role": "user", "content": f"VĂN BẢN:\n{text[:2000]}"},
+    ]
+    try:
+        return complete_structured(messages, _Gate, model=model, temperature=0).has_knowledge
+    except LLMError:
+        return True
 
 
 class _Check(BaseModel):
@@ -119,7 +176,9 @@ VERIFY_PROMPT = (
     "(b) câu hỏi hỏi lý do nhưng văn bản không nêu lý do; "
     "(c) đáp án lấy đặc điểm của một ý khác trong văn bản, ví dụ văn bản nói 'A gây ra X, còn B gây ra Y' "
     "mà đáp án lại nói A gây ra Y; "
-    "(d) đáp án chỉ lặp lại câu hỏi. "
+    "(d) đáp án chỉ lặp lại câu hỏi; "
+    "(e) văn bản vô nghĩa, hoặc câu hỏi chỉ hỏi về hình thức của văn bản (ký tự, từ nào xuất hiện) "
+    "chứ không hỏi về một thông tin, kiến thức. "
     "Với mỗi câu, viết reason (một câu, trích phần văn bản liên quan) rồi mới đặt supported. "
     "Trả về checks theo đúng thứ tự và đúng số lượng câu hỏi."
 )

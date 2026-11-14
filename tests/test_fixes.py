@@ -57,10 +57,12 @@ def test_grounded_evidence_detected():
     assert not quiz_module._is_grounded(q("chunk quá lớn làm mất ngữ cảnh"), source)
 
 
-def fake_llm(monkeypatch, questions, verifier_answers):
+def fake_llm(monkeypatch, questions, verifier_answers, has_knowledge=True):
     def fake(messages, schema, **kwargs):
         if schema is Quiz:
             return Quiz(questions=questions)
+        if schema is quiz_module._Gate:
+            return schema(reason="r", has_knowledge=has_knowledge)
         return schema(checks=[{"reason": "r", "supported": v} for v in verifier_answers])
 
     monkeypatch.setattr(quiz_module, "complete_structured", fake)
@@ -80,3 +82,49 @@ def test_question_rejected_by_verifier_is_ranked_last(monkeypatch):
     # Người soát đề bác câu đầu và chấp nhận câu sau.
     fake_llm(monkeypatch, [q(ev, "lệch đáp án"), q(ev, "khớp đáp án")], [False, True])
     assert quiz_module.generate_quiz(TEXT, n=1).questions[0].question == "khớp đáp án"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "asdasdasd " * 20,
+        "sdfghjkl qwrtp zxcvbnm " * 10,
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "1234567890 !@#$%^&*() " * 10,
+        "hjkdshfjkdshfjkhsdjkfhsdjkhfjksdhfjkhsdkjfhjksdhfjkshdfjkhsdjkfhsdjkfhjksdhfjksdhfjkhsdjkfhsdjkfhsdjk " * 3,
+    ],
+)
+def test_gibberish_is_rejected_without_calling_llm(monkeypatch, text):
+    def boom(*a, **k):
+        raise AssertionError("không được gọi LLM với văn bản vô nghĩa")
+
+    monkeypatch.setattr(quiz_module, "complete_structured", boom)
+    with pytest.raises(quiz_module.LLMError, match="không có nội dung kiến thức"):
+        quiz_module.generate_quiz(text)
+
+
+def test_real_text_is_not_flagged_as_gibberish():
+    assert not quiz_module._looks_meaningless(TEXT)
+    assert not quiz_module._looks_meaningless(
+        "Retrieval augmented generation lets a language model answer from external documents. "
+        "The system first retrieves relevant passages and then adds them to the prompt."
+    )
+    assert not quiz_module._looks_meaningless("機械学習はデータからパターンを学習する技術です。" * 5)
+
+
+def test_model_returning_no_questions_gives_clear_error(monkeypatch):
+    fake_llm(monkeypatch, [], [])
+    with pytest.raises(quiz_module.LLMError, match="không có nội dung kiến thức"):
+        quiz_module.generate_quiz(TEXT)
+
+
+def test_all_questions_rejected_means_no_quiz(monkeypatch):
+    fake_llm(monkeypatch, [q("còn chunk quá nhỏ làm mất ngữ cảnh", "đáng ngờ")], [False])
+    with pytest.raises(quiz_module.LLMError, match="không có nội dung kiến thức"):
+        quiz_module.generate_quiz(TEXT)
+
+
+def test_text_without_knowledge_is_rejected_by_gate(monkeypatch):
+    fake_llm(monkeypatch, [q("còn chunk quá nhỏ làm mất ngữ cảnh", "không nên xuất hiện")], [True], has_knowledge=False)
+    with pytest.raises(quiz_module.LLMError, match="không có nội dung kiến thức"):
+        quiz_module.generate_quiz(TEXT)
