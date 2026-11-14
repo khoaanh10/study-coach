@@ -1,0 +1,19 @@
+LÀM VIỆC VỚI OPENAI API BẰNG PYTHON
+
+1. Chuẩn bị
+Để gọi OpenAI API, bạn cần một API key. Key này là bí mật, không được ghi thẳng vào mã nguồn hay đưa lên git. Cách an toàn là đặt key trong biến môi trường hoặc file .env và đọc nó khi chạy chương trình. Nên đặt hạn mức chi tiêu trên trang quản lý để tránh phát sinh chi phí ngoài ý muốn.
+
+2. Cấu trúc một lời gọi chat
+Một lời gọi chat gồm tên model và danh sách messages. Mỗi message có một vai trò (role): system để đặt quy tắc chung cho mô hình, user cho nội dung người dùng gửi, và assistant cho các câu trả lời trước đó của mô hình. Mô hình không tự nhớ cuộc trò chuyện, nên nếu muốn hội thoại nhiều lượt thì chương trình phải gửi lại lịch sử messages trong mỗi lần gọi.
+
+3. Các tham số quan trọng
+Tham số temperature điều khiển mức ngẫu nhiên của câu trả lời: giá trị thấp cho kết quả ổn định, phù hợp việc trích xuất thông tin, còn giá trị cao cho kết quả đa dạng hơn. Tham số max tokens giới hạn độ dài câu trả lời. Chi phí được tính theo số token đầu vào và đầu ra, vì vậy prompt càng dài thì càng tốn tiền.
+
+4. Structured outputs
+Thay vì nhận văn bản tự do rồi tự phân tích, ta có thể yêu cầu mô hình trả về dữ liệu theo một schema định sẵn, ví dụ khai báo bằng Pydantic. Khi đó kết quả luôn có đúng các trường mong muốn, giúp chương trình xử lý chắc chắn hơn. Cách này rất hữu ích khi sinh câu hỏi trắc nghiệm gồm nội dung câu hỏi, các đáp án, chỉ số đáp án đúng và lời giải thích.
+
+5. Function calling
+Với function calling, ta mô tả cho mô hình các hàm mà chương trình có thể thực hiện. Mô hình sẽ quyết định khi nào cần gọi hàm và trả về tên hàm cùng tham số. Chương trình thực thi hàm rồi gửi kết quả ngược lại cho mô hình để nó đưa ra câu trả lời cuối cùng. Đây là nền tảng để xây dựng các agent biết sử dụng công cụ.
+
+6. Xử lý lỗi
+Lời gọi API có thể thất bại vì mạng, hết hạn mức hoặc vượt giới hạn tốc độ (rate limit). Chương trình nên bắt lỗi, thông báo rõ ràng cho người dùng và thử lại có kiểm soát thay vì để ứng dụng bị treo.

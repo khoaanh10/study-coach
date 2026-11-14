@@ -1,0 +1,19 @@
+RAG CƠ BẢN: TRUY XUẤT RỒI MỚI TRẢ LỜI
+
+1. RAG là gì
+RAG (Retrieval-Augmented Generation) là kỹ thuật cho mô hình ngôn ngữ trả lời dựa trên tài liệu bên ngoài. Thay vì chỉ dùng kiến thức đã học khi huấn luyện, hệ thống trước tiên tìm các đoạn tài liệu liên quan đến câu hỏi, sau đó đưa các đoạn đó vào prompt để mô hình trả lời. Nhờ vậy câu trả lời bám sát tài liệu và có thể dẫn nguồn, giúp giảm hiện tượng mô hình bịa thông tin.
+
+2. Chunking
+Tài liệu dài được chia thành các đoạn nhỏ gọi là chunk. Chunk quá lớn làm việc truy xuất kém chính xác vì chứa nhiều ý lẫn lộn, còn chunk quá nhỏ làm mất ngữ cảnh. Người ta thường để các chunk gối lên nhau một phần, gọi là overlap, để một ý nằm ở ranh giới giữa hai chunk không bị cắt đứt. Mỗi chunk nên lưu kèm metadata như tên tài liệu và số trang để trích nguồn.
+
+3. Embeddings
+Embedding là cách biến một đoạn văn bản thành một vector số, sao cho các đoạn có ý nghĩa gần nhau thì vector gần nhau. Độ gần thường được đo bằng cosine similarity. Nhờ embeddings, hệ thống có thể tìm kiếm theo ý nghĩa chứ không chỉ khớp từ khóa. Ví dụ câu hỏi về "chi phí" vẫn có thể tìm ra đoạn nói về "giá thành".
+
+4. Vector store và truy xuất
+Các vector của chunk được lưu trong một vector store như FAISS, Chroma hoặc Pinecone. Khi người dùng hỏi, câu hỏi cũng được biến thành vector, và vector store trả về top-k chunk gần nhất. Giá trị k thường nhỏ, ví dụ 3 đến 5, để prompt không quá dài và tốn chi phí.
+
+5. Sinh câu trả lời và trích nguồn
+Các chunk tìm được được đưa vào prompt cùng câu hỏi. Prompt nên yêu cầu mô hình chỉ trả lời dựa trên các đoạn này, trích dẫn số trang, và nói rõ "không có trong tài liệu" khi thông tin không xuất hiện. Cách này giúp người dùng kiểm tra lại câu trả lời.
+
+6. Đánh giá chất lượng
+Để biết hệ thống RAG tốt hay chưa, cần một bộ câu hỏi mẫu có đáp án. Ta đo tỉ lệ câu trả lời đúng và tỉ lệ trích đúng nguồn, rồi chạy lại sau mỗi lần thay đổi như đổi kích thước chunk, đổi mô hình embedding hoặc thêm bước rerank.
