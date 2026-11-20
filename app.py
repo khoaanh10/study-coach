@@ -559,16 +559,17 @@ def _render_tab_map(dna: LearnerDNA, coverage: dict) -> None:
             f"Tài liệu **{cmap.doc_title}** gồm **{len(cmap.concepts)} khái niệm cốt lõi** có liên kết tiên quyết. "
             f"Hiện đã làm chủ **{coverage['mastered']}/{coverage['total']}** mục."
         )
+    n_pl = min(max(len(cmap.concepts), 5), 10)
     with c_act:
         if st.button(
-            "Chẩn đoán trình độ đầu vào (3 câu)",
+            f"Chẩn đoán trình độ đầu vào ({n_pl} câu)",
             icon=":material/fact_check:",
             type="primary",
             key="btn_start_placement",
             width="stretch",
         ):
             try:
-                with st.spinner("Đang tạo bài chẩn đoán 3 cấp độ Bloom..."):
+                with st.spinner(f"Đang tạo bài chẩn đoán {n_pl} câu phủ đều các chủ đề (thang Bloom)..."):
                     st.session_state.placement_quiz = adaptive.generate_placement_test(
                         text=st.session_state.doc_text,
                         concept_map=cmap,
@@ -588,42 +589,41 @@ def _render_tab_map(dna: LearnerDNA, coverage: dict) -> None:
         with st.container(border=True):
             st.markdown("#### Bài Chẩn đoán Năng lực Đầu vào (Thang Bloom: Nhớ → Hiểu → Vận dụng)")
             if st.session_state.get("placement_result") is None:
-                p_picks = []
-                for idx, pq in enumerate(p_quiz.questions):
-                    st.markdown(f"**Câu {idx + 1} [{pq.bloom_level} · {pq.topic}].** {pq.question}")
-                    pick = st.radio(
-                        f"placement_{idx}",
-                        options=range(len(pq.options)),
-                        format_func=lambda k, opts=pq.options: f"{'ABCD'[k]}. {opts[k]}",
-                        index=None,
-                        key=f"pl_q_{idx}",
-                        label_visibility="collapsed",
-                    )
-                    p_picks.append(pick)
-                c_sub, c_cls = st.columns([3, 2])
-                with c_sub:
-                    if st.button(
+                with st.form("placement_quiz_form", border=False):
+                    p_picks = []
+                    for idx, pq in enumerate(p_quiz.questions):
+                        st.markdown(f"**Câu {idx + 1} [{pq.bloom_level} · {pq.topic}].** {pq.question}")
+                        pick = st.radio(
+                            f"placement_{idx}",
+                            options=range(len(pq.options)),
+                            format_func=lambda k, opts=pq.options: f"{'ABCD'[k]}. {opts[k]}",
+                            index=None,
+                            key=f"pl_q_{idx}",
+                            label_visibility="collapsed",
+                        )
+                        p_picks.append(pick)
+                    submitted_pl = st.form_submit_button(
                         "Chấm bài & Cập nhật hồ sơ",
                         icon=":material/check:",
                         type="primary",
                         key="btn_submit_placement",
                         width="stretch",
-                    ):
-                        res = grade(p_quiz, p_picks)
-                        adaptive.record_quiz_outcome(
-                            learner_id=dna.learner_id,
-                            doc_id=st.session_state.doc_id,
-                            result=res,
-                            model=st.session_state.selected_model,
-                            difficulty="Chẩn đoán",
-                            concepts_order=[c.name for c in cmap.concepts],
-                        )
-                        st.session_state.placement_result = res
-                        st.rerun()
-                with c_cls:
-                    if st.button("Đóng bài chẩn đoán", key="btn_close_placement", width="stretch"):
-                        st.session_state.placement_quiz = None
-                        st.rerun()
+                    )
+                if submitted_pl:
+                    res = grade(p_quiz, p_picks)
+                    adaptive.record_quiz_outcome(
+                        learner_id=dna.learner_id,
+                        doc_id=st.session_state.doc_id,
+                        result=res,
+                        model=st.session_state.selected_model,
+                        difficulty="Chẩn đoán",
+                        concepts_order=[c.name for c in cmap.concepts],
+                    )
+                    st.session_state.placement_result = res
+                    st.rerun()
+                if st.button("Đóng bài chẩn đoán", key="btn_close_placement", width="stretch"):
+                    st.session_state.placement_quiz = None
+                    st.rerun()
             else:
                 res: QuizResult = st.session_state.placement_result
                 st.success(
@@ -1604,57 +1604,58 @@ def _render_tab_practice(dna: LearnerDNA) -> None:
                 st.info(st.session_state.quiz_strategy)
             version = st.session_state.get("quiz_version", 0)
             total = len(quiz.questions)
-            col_q, col_side = st.columns([8, 3.5], gap="large")
             picks: list[int | None] = []
             confs: list[str] = []
-            with col_q:
-                grid = st.columns(2, gap="medium")
-                for i, q in enumerate(quiz.questions):
-                    with grid[i % 2].container(border=True):
-                        st.caption(f"{q.topic} · Mức Bloom: {q.bloom_level} · {q.page_ref or '[Tài liệu]'}")
-                        st.markdown(f"**Câu {i + 1}/{total}.** {q.question}")
-                        choice = st.radio(
-                            f"Câu {i + 1}",
-                            options=range(len(q.options)),
-                            format_func=lambda k, opts=q.options: f"{'ABCD'[k]}. {opts[k]}",
-                            index=None,
-                            key=f"q{version}_{i}",
-                            label_visibility="collapsed",
-                        )
-                        conf = st.segmented_control(
-                            "Độ tự tin",
-                            options=["Đoán mò", "Bình thường", "Chắc chắn"],
-                            default="Bình thường",
-                            key=f"conf_{version}_{i}",
-                        )
-                        picks.append(choice)
-                        confs.append(conf or "Bình thường")
-            answered = sum(p is not None for p in picks)
-            with col_side:
-                with st.container(border=True):
-                    st.progress(answered / total, text=f"Đã trả lời {answered}/{total} câu")
-                    chips = "".join(
-                        f'<span class="{"on" if p is not None else ""}">{i + 1}</span>'
-                        for i, p in enumerate(picks)
+            with st.form(f"adaptive_quiz_form_{version}", border=False):
+                col_q, col_side = st.columns([8, 3.5], gap="large")
+                with col_q:
+                    grid = st.columns(2, gap="medium")
+                    for i, q in enumerate(quiz.questions):
+                        with grid[i % 2].container(border=True):
+                            st.caption(f"{q.topic} · Mức Bloom: {q.bloom_level} · {q.page_ref or '[Tài liệu]'}")
+                            st.markdown(f"**Câu {i + 1}/{total}.** {q.question}")
+                            choice = st.radio(
+                                f"Câu {i + 1}",
+                                options=range(len(q.options)),
+                                format_func=lambda k, opts=q.options: f"{'ABCD'[k]}. {opts[k]}",
+                                index=None,
+                                key=f"q{version}_{i}",
+                                label_visibility="collapsed",
+                            )
+                            conf = st.segmented_control(
+                                "Độ tự tin",
+                                options=["Đoán mò", "Bình thường", "Chắc chắn"],
+                                default="Bình thường",
+                                key=f"conf_{version}_{i}",
+                            )
+                            picks.append(choice)
+                            confs.append(conf or "Bình thường")
+                with col_side:
+                    with st.container(border=True):
+                        st.markdown(f"**Bài kiểm tra gồm {total} câu**")
+                        st.caption("Chọn đáp án và mức tự tin cho từng câu rồi bấm Nộp bài (không làm mới trang khi chọn). Câu bỏ trống tính sai khi nộp.")
+                    submitted_quiz = st.form_submit_button(
+                        "Nộp bài & Chẩn đoán",
+                        icon=":material/done_all:",
+                        type="primary",
+                        key="btn_submit_quiz",
+                        width="stretch",
                     )
-                    st.markdown(f'<div class="sc-chips">{chips}</div>', unsafe_allow_html=True)
-                    if answered < total:
-                        st.caption("Câu bỏ trống tính sai khi nộp.")
-                if st.button("Nộp bài & Chẩn đoán", icon=":material/done_all:", type="primary", key="btn_submit_quiz", width="stretch"):
-                    res = grade(quiz, picks, confidences=confs)
-                    st.session_state.quiz_result = res
-                    if not st.session_state.quiz_recorded:
-                        adaptive.record_quiz_outcome(
-                            learner_id=dna.learner_id,
-                            doc_id=st.session_state.doc_id,
-                            result=res,
-                            model=st.session_state.selected_model if not _is_demo_mode() else "Offline-Demo",
-                            difficulty=st.session_state.get("quiz_difficulty_used") or "Tự động",
-                            concepts_order=concept_names,
-                        )
-                        st.session_state.quiz_recorded = True
-                    st.rerun()
-                st.button("Tạo quiz khác", on_click=_new_quiz, key="btn_abandon_quiz", width="stretch")
+            if submitted_quiz:
+                res = grade(quiz, picks, confidences=confs)
+                st.session_state.quiz_result = res
+                if not st.session_state.quiz_recorded:
+                    adaptive.record_quiz_outcome(
+                        learner_id=dna.learner_id,
+                        doc_id=st.session_state.doc_id,
+                        result=res,
+                        model=st.session_state.selected_model if not _is_demo_mode() else "Offline-Demo",
+                        difficulty=st.session_state.get("quiz_difficulty_used") or "Tự động",
+                        concepts_order=concept_names,
+                    )
+                    st.session_state.quiz_recorded = True
+                st.rerun()
+            st.button("Tạo quiz khác", on_click=_new_quiz, key="btn_abandon_quiz")
         else:
             wrong = sum(1 for it in result.items if not it.is_correct and it.chosen_index is not None)
             skipped = sum(1 for it in result.items if it.chosen_index is None)

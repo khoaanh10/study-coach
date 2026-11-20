@@ -71,13 +71,16 @@ def generate_placement_test(
 ) -> Quiz:
     """Sinh bài chẩn đoán năng lực đầu vào 3 câu leo thang Bloom: Nhớ -> Hiểu -> Vận dụng."""
     concept_names = [c.name for c in concept_map.concepts[:5]]
+    n_target = min(max(len(concept_names), 5), 10)
+    bloom_cycle = ("Nhớ", "Hiểu", "Vận dụng", "Phân tích")
     if demo_mode or not config.has_live_api_key():
-        # Lấy 3 câu trải đều 3 cấp độ Bloom và ưu tiên phủ 3 chủ đề khác nhau.
-        pool = demo_generate_quiz(text=text, n=10, difficulty="Trung bình").questions
+        # Lấy đủ câu phủ tối đa các chủ đề của tài liệu và trải đều 4 cấp độ Bloom.
+        pool = demo_generate_quiz(text=text, n=max(n_target, 10), difficulty="Trung bình").questions
         picked = []
         used_q: set[str] = set()
         used_topics: set[str] = set()
-        for target_bloom in ("Nhớ", "Hiểu", "Vận dụng"):
+        for idx in range(n_target):
+            target_bloom = bloom_cycle[idx % len(bloom_cycle)]
             cand = next(
                 (
                     q
@@ -87,12 +90,9 @@ def generate_placement_test(
                 None,
             )
             if cand is None:
-                cand = next(
-                    (q for q in pool if q.bloom_level == target_bloom and q.question not in used_q),
-                    None,
-                )
-            if cand is None:
                 cand = next((q for q in pool if q.question not in used_q and q.topic not in used_topics), None)
+            if cand is None:
+                cand = next((q for q in pool if q.bloom_level == target_bloom and q.question not in used_q), None)
             if cand is None:
                 cand = next((q for q in pool if q.question not in used_q), None)
             if cand is not None:
@@ -100,15 +100,19 @@ def generate_placement_test(
                 if cand.topic:
                     used_topics.add(cand.topic)
                 picked.append(cand)
-        return Quiz(questions=picked[:3])
+        return Quiz(questions=picked[:n_target])
 
-    topic_list = ", ".join(concept_names) or "nội dung chính của tài liệu"
+    topic_lines = "\n".join(
+        f"- Câu {i + 1}: chủ đề '{concept_names[i % len(concept_names)]}' — mức Bloom '{bloom_cycle[i % len(bloom_cycle)]}'"
+        for i in range(n_target)
+    ) if concept_names else "\n".join(
+        f"- Câu {i + 1}: mức Bloom '{bloom_cycle[i % len(bloom_cycle)]}'"
+        for i in range(n_target)
+    )
     user_prompt = (
-        "Hãy tạo đúng 3 câu hỏi CHẨN ĐOÁN TRÌNH ĐỘ ĐẦU VÀO cho tài liệu này theo thang tăng dần:\n"
-        "- Câu 1: mức Bloom 'Nhớ' (cơ bản)\n"
-        "- Câu 2: mức Bloom 'Hiểu' (trung bình)\n"
-        "- Câu 3: mức Bloom 'Vận dụng' (nâng cao)\n"
-        f"Ưu tiên phủ các chủ đề: {topic_list}.\n\nVĂN BẢN:\n{text[:config.MAX_INPUT_CHARS]}"
+        f"Hãy tạo đúng {n_target} câu hỏi CHẨN ĐOÁN TRÌNH ĐỘ ĐẦU VÀO phủ đều toàn bộ các chủ đề chính của tài liệu:\n"
+        f"{topic_lines}\n"
+        f"Mỗi câu phải bám sát văn bản và ghi đúng tên chủ đề tương ứng.\n\nVĂN BẢN:\n{text[:config.MAX_INPUT_CHARS]}"
     )
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -118,7 +122,7 @@ def generate_placement_test(
         messages, Quiz, model=model or config.DEFAULT_MODEL, temperature=0.2, purpose="placement_test", db_path=db_path
     )
     # Chỉ giữ câu hợp lệ (đủ 4 đáp án, chỉ số đúng trong 0..3), không chấm người học theo câu hỏng.
-    return Quiz(questions=[q for q in quiz.questions if _is_valid(q)][:3])
+    return Quiz(questions=[q for q in quiz.questions if _is_valid(q)][:n_target])
 
 
 def _match_concept_name(raw_topic: str, concepts_order: list[str] | None) -> str:

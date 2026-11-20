@@ -6,7 +6,7 @@
   "source_citation_accuracy": "16/16",
   "out_of_scope_refusal": "4/4",
   "overall_retrieval_pass_rate": 100.0,
-  "avg_retrieval_latency_ms": 0.68,
+  "avg_retrieval_latency_ms": 0.75,
   "baseline_comparison": [
     {
       "name": "Đối chứng (Chunk=1400, Overlap=0, cùng metadata, không có cổng ngoài-tài-liệu)",
@@ -50,7 +50,7 @@
       "top_source": "rag-co-ban.txt",
       "top_score": 0.432,
       "passed": true,
-      "latency_ms": 0.8
+      "latency_ms": 0.75
     },
     {
       "id": "EV-02",
@@ -60,7 +60,7 @@
       "top_source": "rag-co-ban.txt",
       "top_score": 0.471,
       "passed": true,
-      "latency_ms": 0.74
+      "latency_ms": 0.77
     },
     {
       "id": "EV-03",
@@ -70,7 +70,7 @@
       "top_source": "rag-co-ban.txt",
       "top_score": 0.323,
       "passed": true,
-      "latency_ms": 0.48
+      "latency_ms": 0.49
     },
     {
       "id": "EV-04",
@@ -90,7 +90,7 @@
       "top_source": "rag-co-ban.txt",
       "top_score": 0.676,
       "passed": true,
-      "latency_ms": 1.07
+      "latency_ms": 1.15
     },
     {
       "id": "EV-06",
@@ -100,7 +100,7 @@
       "top_source": "rag-co-ban.txt",
       "top_score": 0.53,
       "passed": true,
-      "latency_ms": 0.83
+      "latency_ms": 1.04
     },
     {
       "id": "EV-07",
@@ -110,7 +110,7 @@
       "top_source": "rag-co-ban.txt",
       "top_score": 0.337,
       "passed": true,
-      "latency_ms": 0.7
+      "latency_ms": 0.76
     },
     {
       "id": "EV-08",
@@ -120,7 +120,7 @@
       "top_source": "rag-co-ban.txt",
       "top_score": 0.332,
       "passed": true,
-      "latency_ms": 0.58
+      "latency_ms": 0.6
     },
     {
       "id": "EV-09",
@@ -130,7 +130,7 @@
       "top_source": "openai-api-co-ban.txt",
       "top_score": 0.177,
       "passed": true,
-      "latency_ms": 0.38
+      "latency_ms": 0.42
     },
     {
       "id": "EV-10",
@@ -140,7 +140,7 @@
       "top_source": "openai-api-co-ban.txt",
       "top_score": 0.504,
       "passed": true,
-      "latency_ms": 0.84
+      "latency_ms": 0.92
     },
     {
       "id": "EV-11",
@@ -150,7 +150,7 @@
       "top_source": "openai-api-co-ban.txt",
       "top_score": 0.458,
       "passed": true,
-      "latency_ms": 0.75
+      "latency_ms": 1.2
     },
     {
       "id": "EV-12",
@@ -160,7 +160,7 @@
       "top_source": "openai-api-co-ban.txt",
       "top_score": 0.194,
       "passed": true,
-      "latency_ms": 0.63
+      "latency_ms": 0.96
     },
     {
       "id": "EV-13",
@@ -170,7 +170,7 @@
       "top_source": "rag-co-ban.txt",
       "top_score": 0.403,
       "passed": true,
-      "latency_ms": 0.84
+      "latency_ms": 0.76
     },
     {
       "id": "EV-14",
@@ -180,7 +180,7 @@
       "top_source": "openai-api-co-ban.txt",
       "top_score": 0.295,
       "passed": true,
-      "latency_ms": 0.58
+      "latency_ms": 0.54
     },
     {
       "id": "EV-15",
@@ -190,7 +190,7 @@
       "top_source": "openai-api-co-ban.txt",
       "top_score": 0.553,
       "passed": true,
-      "latency_ms": 0.64
+      "latency_ms": 0.77
     },
     {
       "id": "EV-16",
@@ -200,7 +200,7 @@
       "top_source": "openai-api-co-ban.txt",
       "top_score": 0.679,
       "passed": true,
-      "latency_ms": 0.8
+      "latency_ms": 1.03
     },
     {
       "id": "EV-17",
@@ -210,7 +210,7 @@
       "top_source": "openai-api-co-ban.txt",
       "top_score": 0.263,
       "passed": true,
-      "latency_ms": 0.6
+      "latency_ms": 0.63
     },
     {
       "id": "EV-18",
@@ -220,7 +220,7 @@
       "top_source": "openai-api-co-ban.txt",
       "top_score": 0.188,
       "passed": true,
-      "latency_ms": 0.5
+      "latency_ms": 0.49
     },
     {
       "id": "EV-19",
@@ -230,7 +230,7 @@
       "top_source": "openai-api-co-ban.txt",
       "top_score": 0.27,
       "passed": true,
-      "latency_ms": 0.76
+      "latency_ms": 0.74
     },
     {
       "id": "EV-20",

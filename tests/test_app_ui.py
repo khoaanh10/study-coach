@@ -270,8 +270,8 @@ def test_breakthrough_lab_and_confidence_quiz(tmp_path: Path, monkeypatch):
     ver = at.session_state["quiz_version"]
     quiz = at.session_state["quiz"]
     wrong_choice = (quiz.questions[0].correct_index + 1) % 4
-    at.radio(f"q{ver}_0").set_value(wrong_choice).run()
-    at.segmented_control(f"conf_{ver}_0").set_value("Chắc chắn").run()
+    at.radio(f"q{ver}_0").set_value(wrong_choice)
+    at.segmented_control(f"conf_{ver}_0").set_value("Chắc chắn")
     at.button("btn_submit_quiz").click().run()
     assert not at.exception
     assert at.session_state["quiz_result"].blind_spot_count == 1

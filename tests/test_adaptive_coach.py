@@ -115,7 +115,7 @@ def test_concept_map_placement_teach_back_and_study_plan(temp_db: Path):
     assert len(cmap.concepts) >= 5
 
     placement = adaptive.generate_placement_test(text, cmap, demo_mode=True)
-    assert len(placement.questions) == 3
+    assert len(placement.questions) >= 5
 
     intern = db.get_learner_dna("intern_demo", db.DEFAULT_DOC_ID, [c.name for c in cmap.concepts], db_path=temp_db)
     ev_bad, dna_after_bad = adaptive.evaluate_teach_back(
