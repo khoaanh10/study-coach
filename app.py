@@ -360,6 +360,32 @@ def _restore_saved_document(learner_id: str, doc_id: str) -> bool:
 LEVEL_OPTIONS = ["Mới bắt đầu", "Trung cấp", "Nâng cao"]
 
 
+@st.cache_resource(show_spinner=False)
+def _session_signing_key() -> bytes:
+    return hashlib.sha256(f"study-coach-session::{config.DB_PATH}".encode("utf-8")).digest()
+
+
+def _make_session_token(learner_id: str) -> str:
+    import hmac
+
+    sig = hmac.new(_session_signing_key(), learner_id.encode("utf-8"), hashlib.sha256).hexdigest()[:16]
+    return f"{learner_id}.{sig}"
+
+
+def _verify_session_token(token: str) -> str:
+    import hmac
+
+    if not token or "." not in token:
+        return ""
+    lid, sig = token.rsplit(".", 1)
+    expected = hmac.new(_session_signing_key(), lid.encode("utf-8"), hashlib.sha256).hexdigest()[:16]
+    if not hmac.compare_digest(sig, expected):
+        return ""
+    if not db.get_user_display_name(lid):
+        return ""
+    return lid
+
+
 def _logout() -> None:
     st.session_state["logged_in_learner_id"] = ""
     st.session_state["learner_id"] = ""
@@ -374,6 +400,10 @@ def _logout() -> None:
     st.session_state.has_document = False
     st.session_state.pending_placement_after_doc = False
     st.session_state.chat_histories = {}
+    try:
+        st.query_params.pop("session", None)
+    except Exception:
+        pass
 
 
 def _do_login(learner_id: str, start_placement: bool = False) -> None:
@@ -382,6 +412,11 @@ def _do_login(learner_id: str, start_placement: bool = False) -> None:
     _reset_learner_session_results()
     st.session_state["pending_placement_after_doc"] = bool(start_placement)
     st.session_state["active_nav"] = "coach"
+    try:
+        if db.get_user_display_name(learner_id):
+            st.query_params["session"] = _make_session_token(learner_id)
+    except Exception:
+        pass
     if not st.session_state.get("has_document"):
         saved_docs = db.list_learner_documents(learner_id)
         if saved_docs:
@@ -2081,6 +2116,13 @@ def _main_body() -> None:
     st.session_state.setdefault("chat_focus_mode", False)
     st.session_state.setdefault("show_dashboard_strip", True)
     st.session_state.setdefault("logged_in_learner_id", "")
+    if not st.session_state["logged_in_learner_id"]:
+        try:
+            restored_lid = _verify_session_token(str(st.query_params.get("session", "") or ""))
+            if restored_lid:
+                _do_login(restored_lid, start_placement=False)
+        except Exception:
+            pass
     login_slot = st.empty()
     if not st.session_state["logged_in_learner_id"]:
         with login_slot.container():
