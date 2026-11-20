@@ -389,6 +389,7 @@ def _verify_session_token(token: str) -> str:
 def _logout() -> None:
     st.session_state["logged_in_learner_id"] = ""
     st.session_state["learner_id"] = ""
+    st.session_state["_logged_out"] = True
     st.session_state["active_nav"] = "coach"
     _reset_learner_session_results()
     st.session_state.doc_id = ""
@@ -409,12 +410,12 @@ def _logout() -> None:
 def _do_login(learner_id: str, start_placement: bool = False) -> None:
     st.session_state["logged_in_learner_id"] = learner_id
     st.session_state["learner_id"] = learner_id
+    st.session_state["_logged_out"] = False
     _reset_learner_session_results()
     st.session_state["pending_placement_after_doc"] = bool(start_placement)
     st.session_state["active_nav"] = "coach"
     try:
-        if db.get_user_display_name(learner_id):
-            st.query_params["session"] = _make_session_token(learner_id)
+        st.query_params.pop("session", None)
     except Exception:
         pass
     if not st.session_state.get("has_document"):
@@ -2163,20 +2164,38 @@ def _main_body() -> None:
     st.session_state.setdefault("chat_focus_mode", False)
     st.session_state.setdefault("show_dashboard_strip", True)
     st.session_state.setdefault("logged_in_learner_id", "")
-    if not st.session_state["logged_in_learner_id"]:
+    st.session_state.setdefault("_logged_out", False)
+    if not st.session_state["logged_in_learner_id"] and not st.session_state.get("_logged_out"):
         try:
-            restored_lid = _verify_session_token(str(st.query_params.get("session", "") or ""))
+            cookie_tok = str(st.context.cookies.get("sc_session", "") or st.query_params.get("session", "") or "")
+            restored_lid = _verify_session_token(cookie_tok)
             if restored_lid:
                 _do_login(restored_lid, start_placement=False)
         except Exception:
             pass
+    try:
+        if "session" in st.query_params:
+            st.query_params.pop("session", None)
+    except Exception:
+        pass
     login_slot = st.empty()
     if not st.session_state["logged_in_learner_id"]:
+        if st.session_state.get("_logged_out"):
+            st.html(
+                '<script>document.cookie = "sc_session=; path=/; max-age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax";</script>',
+                unsafe_allow_javascript=True,
+            )
         with login_slot.container():
             _render_login_screen()
         return
     login_slot.empty()
     st.session_state["learner_id"] = st.session_state["logged_in_learner_id"]
+    if db.get_user_display_name(st.session_state["learner_id"]):
+        tok = _make_session_token(st.session_state["learner_id"])
+        st.html(
+            f'<script>document.cookie = "sc_session={tok}; path=/; max-age=604800; SameSite=Lax";</script>',
+            unsafe_allow_javascript=True,
+        )
     telemetry = db.get_telemetry_summary(limit=5)
     in_focus = st.session_state.get("active_nav") == "coach" and bool(st.session_state.chat_focus_mode)
 

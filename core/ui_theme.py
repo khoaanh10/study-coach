@@ -1071,6 +1071,13 @@ def inject_theme_css() -> str:
             color: var(--ink-secondary);
             line-height: 1.5;
         }
+        .stElementContainer:has(div[data-testid="stHtml"] script),
+        div[data-testid="stHtml"]:has(script) {
+            display: none !important;
+            height: 0 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }
         </style>
         """
     )
