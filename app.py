@@ -495,7 +495,7 @@ def _render_login_screen() -> None:
         tab_login, tab_register = st.tabs(["Đăng nhập", "Đăng ký"])
         api_key = ""
         with tab_login:
-            with st.container(border=True):
+            with st.form("form_login", border=True):
                 username = st.text_input("Tên đăng nhập", key="login_username_input")
                 password = st.text_input("Mật khẩu", type="password", key="login_password_input")
                 if not config.has_live_api_key():
@@ -505,18 +505,18 @@ def _render_login_screen() -> None:
                         key="login_api_key_input",
                         placeholder="Dán key AI Portal để chạy Live...",
                     )
-                submitted_login = st.button(
+                submitted_login = st.form_submit_button(
                     "Đăng nhập", key="btn_login_submit", type="primary", width="stretch"
                 )
         with tab_register:
-            with st.container(border=True):
+            with st.form("form_register", border=True):
                 reg_username = st.text_input("Tên đăng nhập", key="reg_username_input")
                 reg_display = st.text_input(
                     "Họ và tên hiển thị", key="reg_display_name_input", placeholder="Ví dụ: Nguyễn Khoa Anh"
                 )
                 reg_password = st.text_input("Mật khẩu", type="password", key="reg_password_input")
                 reg_password2 = st.text_input("Nhập lại mật khẩu", type="password", key="reg_password2_input")
-                submitted_register = st.button(
+                submitted_register = st.form_submit_button(
                     "Tạo tài khoản & Đánh giá đầu vào", key="btn_register_submit", type="primary", width="stretch"
                 )
 
@@ -1464,7 +1464,7 @@ def _render_tab_coach(dna: LearnerDNA) -> None:
                                 st.markdown(
                                     clean_html(
                                         f"""
-                                        <div style="background:#eef8f2;border-left:3.5px solid #16a34a;padding:0.55rem 0.85rem;border-radius:0 8px 8px 0;margin-top:0.5rem;font-size:0.86rem;color:#133822;">
+                                        <div style="background:#eef8f2;border-left:3.5px solid #16a34a;padding:0.65rem 0.9rem;border-radius:0 8px 8px 0;margin:0.65rem 0 0.85rem 0;font-size:0.86rem;color:#133822;">
                                           <b>💡 Câu hỏi Socratic dành cho bạn:</b> {esc(turn.follow_up_question)}
                                         </div>
                                         """

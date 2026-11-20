@@ -981,13 +981,20 @@ def inject_theme_css() -> str:
             color: #0f3d22 !important;
             transform: translateY(-1px);
         }
-        div[data-testid="stButton"] > button[kind="primary"] {
+        div[data-testid="stButton"] > button[kind="primary"],
+        div[data-testid="stFormSubmitButton"] > button {
             border-radius: 999px !important;
             background: linear-gradient(135deg, #16a34a 0%, #15803d 100%) !important;
             color: #ffffff !important;
-            min-height: 36px !important;
+            border: none !important;
+            min-height: 38px !important;
             font-weight: 700 !important;
             box-shadow: 0 3px 10px rgba(22, 163, 74, 0.25) !important;
+        }
+        div[data-testid="stButton"] > button[kind="primary"] *,
+        div[data-testid="stFormSubmitButton"] > button * {
+            color: #ffffff !important;
+            font-weight: 700 !important;
         }
         /* Tier 3: Expanders — soft tinted collapsible drawers */
         div[data-testid="stExpander"],
@@ -1016,11 +1023,15 @@ def inject_theme_css() -> str:
             background: #e3f5ea !important;
             border: 1px solid #bce2ca !important;
         }
+        div[data-testid="stChatMessage"] div[data-testid="stButton"] {
+            margin-top: 0.65rem !important;
+            margin-bottom: 0.5rem !important;
+        }
         div[data-testid="stChatMessage"] div[data-testid="stExpander"] {
             background: #f5faf7 !important;
             border: 1px dashed #c5dfd0 !important;
             border-radius: 8px !important;
-            margin-top: 0.35rem !important;
+            margin-top: 0.55rem !important;
         }
         /* Tier 5: Unified chat card classes */
         div[data-testid="stVerticalBlockBorderWrapper"] {
