@@ -229,6 +229,8 @@ _HEDGE_GUESS_RE = re.compile(
 _CONTINUE_PHRASES = (
     "bat dau", "giang luon", "di sau", "phan do", "muc do", "hoc luon",
     "cai dau tien", "phan dau tien", "muc dau", "hoc phan", "luon di", "luon nhe",
+    "chu de khac", "doi chu de", "chuyen chu de", "phan khac", "bai khac", "muc khac",
+    "chu de tiep", "phan tiep", "bai tiep",
 )
 _NAV_OFFER_PHRASES = (
     "ban muon bat dau", "ban muon minh di sau", "ban muon chuyen sang", "tom tat nhanh",
@@ -559,8 +561,8 @@ def _classify_intent_with_llm(
         "   - Đồng ý/phản đối/đoán ngắn ('có', 'có chứ', 'ờ chắc v', 'mình đoán là có', 'không hẳn') -> `confirm_answer`.\n"
         "   - Nói không biết / chịu / chưa hiểu / nhờ giải thích ('ko biết, giải thích', 'chịu, nói đáp án đi', 'ý là sao') -> `followup_elaborate`, `matched_topic = last_topic`.\n"
         "   - Xin ví dụ ('cho 1 vd đời thường đi') -> `followup_example`, `matched_topic = last_topic`.\n"
-        "   - Muốn đổi câu hỏi / bỏ qua ('hỏi câu khác', 'đổi câu dễ hơn', 'bỏ qua') -> `next_question`.\n"
-        "   - Đồng ý bắt đầu/học tiếp ('bắt đầu', 'học luôn', 'tiếp đi') -> `continue_topic`.\n"
+        "   - Muốn đổi câu hỏi Socratic hiện tại ('hỏi câu khác', 'đổi câu dễ hơn', 'bỏ qua câu này') -> `next_question`.\n"
+        "   - Đồng ý bắt đầu/học tiếp ('bắt đầu', 'học luôn', 'tiếp đi', 'dạy tôi') HOẶC muốn chuyển sang học chủ đề khác/tiếp theo ('học chủ đề khác', 'đổi chủ đề', 'sang phần khác', 'tiếp theo học gì') -> `continue_topic` (nếu học viên muốn sang chủ đề khác/tiếp theo, đặt `matched_topic` là tên chủ đề KẾ TIẾP sau `last_topic` trong mục lục).\n"
         "   - Chào hỏi, hỏi về hồ sơ/tiến độ/điểm số/trình độ bản thân ('trình độ của tôi có tăng không', 'điểm mình bao nhiêu rồi', kể cả có 'ok,' ở đầu) -> `greeting_or_meta`; tóm tắt tài liệu -> `doc_summary`; ôn tập -> `review_request`; xác nhận/cảm ơn -> `acknowledgement`; phàn nàn hiểu nhầm -> `conversation_repair`.\n"
         "2. CHỈ đặt `in_scope = false` (và `intent = 'standard_qa'`) khi học viên hỏi một câu kiến thức MỚI RÕ RÀNG nằm ngoài hoàn toàn chủ đề tài liệu (ví dụ: 'giá vàng hôm nay', 'thủ đô của Pháp', 'cài Kubernetes thế nào' khi tài liệu không nói về chúng).\n"
         "3. `standalone_query`: viết câu truy vấn rõ nghĩa để tìm đoạn nguồn trong tài liệu. Nếu tài liệu bằng tiếng Anh mà học viên hỏi tiếng Việt, viết `standalone_query` bằng CÙNG NGÔN NGỮ với tài liệu (hoặc song ngữ Anh-Viet) để truy xuất chính xác.\n"
@@ -814,7 +816,25 @@ def _inspect_state(state: CoachState, kb: DualMemoryKnowledgeBase) -> dict:
         # Câu gợi mở có thể kết thúc bằng '!' nên không trích được tên chủ đề: lùi về nội dung câu trả lời gần nhất.
         last_assistant_content = _last_assistant_content(state.get("chat_history", []))
         offered = _match_topic_in_query(last_follow_up, cmap) or _match_topic_in_query(last_assistant_content, cmap)
-        topic = offered or (last_topic if any(c.name == last_topic for c in cmap.concepts) else _pick_review_topic(dna, cmap))
+        cur_anchor = offered or (last_topic if any(c.name == last_topic for c in cmap.concepts) else "")
+        q_fold = _strip_accents(state["query"].lower())
+        wants_different_topic = any(
+            p in q_fold
+            for p in ("chu de khac", "doi chu de", "chuyen chu de", "phan khac", "bai khac", "muc khac", "chu de tiep", "phan tiep", "bai tiep", "tiep theo")
+        )
+        llm_pick = ""
+        if llm_router is not None and llm_router.matched_topic:
+            llm_pick = next((c.name for c in cmap.concepts if c.name.lower() == llm_router.matched_topic.strip().lower()), "")
+        names = [c.name for c in cmap.concepts]
+        if wants_different_topic and names:
+            if llm_pick and llm_pick != cur_anchor:
+                topic = llm_pick
+            elif cur_anchor in names:
+                topic = names[(names.index(cur_anchor) + 1) % len(names)]
+            else:
+                topic = names[1] if len(names) > 1 else names[0]
+        else:
+            topic = llm_pick or cur_anchor or _pick_review_topic(dna, cmap)
         node = next((c for c in cmap.concepts if c.name == topic), None)
         chunks, _ = kb.retrieve(f"{topic} {node.summary}" if node else topic, top_k=4)
         in_scope = True
@@ -1325,15 +1345,21 @@ def _build_coach_graph(kb: DualMemoryKnowledgeBase, db_path: str | Path | None =
                 if hist.get("role") in {"user", "assistant"} and hist.get("content"):
                     who = "Học viên" if hist["role"] == "user" else "Gia sư"
                     history_lines.append(f"{who}: {str(hist['content'])[:400]}")
+            concepts_overview = "\n".join(
+                f"- {c.name}: {(c.summary or '')[:140]}" for c in state["concept_map"].concepts[:10]
+            ) or "(trống)"
             sys_prompt = (
-                "Bạn là Gia sư Socratic nghiêm túc nhưng gần gũi, trả lời bằng tiếng Việt, ngắn gọn (2-4 câu). "
-                "QUY TẮC QUAN TRỌNG: KHÔNG BAO GIỜ tin suông hay khen 'tuyệt vời, bạn đã hiểu rồi' khi học viên chỉ nói 'ok', 'hiểu rồi', 'có'. "
-                "Hãy nói thẳng rằng chỉ nói 'hiểu rồi' chưa chứng minh được mức hiểu (và chưa được cộng điểm trình độ); "
-                "gợi ý ngắn họ có thể tự giải thích 1–2 câu ngay tại đây hoặc bấm nút 'Luyện ngay Quiz' bên dưới để chấm điểm nâng trình độ, "
-                "rồi đặt ĐÚNG MỘT câu hỏi kiểm tra thực chất, ngắn gọn về chủ đề hiện tại (không lặp nguyên văn câu cũ, không bịa ngoài tài liệu)."
+                "Bạn là Gia sư AI Socratic thông minh, tự nhiên, trả lời bằng tiếng Việt ngắn gọn (2-5 câu). "
+                "Đọc kỹ LỊCH SỬ HỘI THOẠI, MỤC LỤC TÀI LIỆU và câu vừa nói của học viên để phản hồi linh hoạt đúng ngữ cảnh:\n"
+                "- Nếu học viên muốn học chủ đề khác / phần tiếp theo: chuyển ngay sang chủ đề kế tiếp trong mục lục tài liệu, giới thiệu ngắn gọn ý chính của chủ đề mới đó và đặt 1 câu hỏi mở đầu.\n"
+                "- Nếu học viên xin đổi câu hỏi / hỏi câu khác / bỏ qua: đổi ngay sang 1 câu hỏi Socratic mới dễ hơn hoặc góc nhìn khác về chủ đề đang học.\n"
+                "- Nếu học viên trả lời Có/Không/Đoán ngắn cho câu hỏi Socratic: ghi nhận lựa chọn đó và hỏi ngắn vì sao họ nghĩ vậy.\n"
+                "- CHỈ KHI học viên tự nhận 'hiểu rồi' / 'biết rồi': mới nhắc nhẹ rằng nói hiểu rồi chưa đủ cộng điểm trình độ (có thể tự giải thích 1-2 câu tại đây hoặc bấm 'Luyện ngay Quiz'), rồi hỏi 1 câu kiểm tra ngắn.\n"
+                "- Tuyệt đối không trả lời máy móc kiểu văn mẫu, không lặp nguyên văn câu hỏi cũ, không bịa ngoài tài liệu."
             )
             user_prompt = (
                 f"Chủ đề hiện tại: {base.get('topic') or state['topic']}\n"
+                f"Mục lục các chủ đề trong tài liệu:\n{concepts_overview}\n"
                 f"Câu hỏi Gia sư vừa đặt: {state.get('last_follow_up') or 'Không có'}\n"
                 f"Ý định hội thoại: {state.get('conv_intent', '')}\n"
                 f"Hội thoại gần đây:\n{chr(10).join(history_lines) or '(trống)'}\n\n"
