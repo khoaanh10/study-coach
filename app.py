@@ -287,7 +287,7 @@ def _reset_doc_scoped_inputs(cmap: DocumentConceptMap | None) -> None:
 
 def _apply_new_document(text: str, sections: list[dict], title: str, doc_id: str) -> None:
     demo = _is_demo_mode()
-    kb = DualMemoryKnowledgeBase(sections, embeddings=build_embeddings(demo_mode=demo), fallback_text=text)
+    kb = _build_cached_doc_kb(doc_id, not demo, sections, text)
     cmap = adaptive.extract_concept_map(
         text,
         doc_id=doc_id,
@@ -326,17 +326,23 @@ def _apply_new_document(text: str, sections: list[dict], title: str, doc_id: str
     st.session_state.submission_results = {}
 
 
+@st.cache_resource(show_spinner=False)
+def _build_cached_doc_kb(doc_id: str, live: bool, _sections: list[dict], _doc_text: str) -> DualMemoryKnowledgeBase:
+    """Cache FAISS index theo (doc_id, live) để đăng nhập lại không phải gọi lại OpenAI Embeddings."""
+    return DualMemoryKnowledgeBase(
+        _sections,
+        embeddings=build_embeddings(demo_mode=not live),
+        fallback_text=_doc_text,
+    )
+
+
 def _restore_saved_document(learner_id: str, doc_id: str) -> bool:
-    """Mở lại tài liệu đã lưu của profile (không gọi LLM dựng lại concept map)."""
+    """Mở lại tài liệu đã lưu của profile (dùng cache FAISS, không gọi LLM dựng lại concept map)."""
     saved = db.load_learner_document(learner_id, doc_id)
     if saved is None:
         return False
     live = config.has_live_api_key() and not _is_demo_mode()
-    kb = DualMemoryKnowledgeBase(
-        saved["sections"],
-        embeddings=build_embeddings(demo_mode=not live),
-        fallback_text=saved["doc_text"],
-    )
+    kb = _build_cached_doc_kb(doc_id, live, saved["sections"], saved["doc_text"])
     st.session_state.doc_id = doc_id
     st.session_state.doc_title = saved["title"]
     st.session_state.doc_text = saved["doc_text"]
@@ -2046,9 +2052,12 @@ def _main_body() -> None:
     st.session_state.setdefault("chat_focus_mode", False)
     st.session_state.setdefault("show_dashboard_strip", True)
     st.session_state.setdefault("logged_in_learner_id", "")
+    login_slot = st.empty()
     if not st.session_state["logged_in_learner_id"]:
-        _render_login_screen()
+        with login_slot.container():
+            _render_login_screen()
         return
+    login_slot.empty()
     st.session_state["learner_id"] = st.session_state["logged_in_learner_id"]
     telemetry = db.get_telemetry_summary(limit=5)
     in_focus = st.session_state.get("active_nav") == "coach" and bool(st.session_state.chat_focus_mode)
