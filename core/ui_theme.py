@@ -910,6 +910,156 @@ def inject_theme_css() -> str:
         .sc-login-card .sc-brand-lockup { justify-content:center; text-align:left; }
         .sc-login-card p { color:var(--ink-secondary); font-size:0.88rem; margin:0.6rem 0 0 0; }
         @media (max-width: 960px) { .sc-bento-grid { grid-template-columns: repeat(2, minmax(0,1fr)); } }
+        /* ===== 5-Tier Visual Hierarchy ===== */
+        /* Tier 1: Top navigation segmented bar — sage track, dark active pill */
+        div[data-testid="stSegmentedControl"],
+        div[data-testid="stButtonGroup"] {
+            background: #dceee3 !important;
+            border: 1.5px solid #b7d7c4 !important;
+            border-radius: 14px !important;
+            padding: 5px 6px !important;
+            box-shadow: inset 0 1px 2px rgba(15, 46, 29, 0.06) !important;
+        }
+        div[data-testid="stSegmentedControl"] [role="radiogroup"],
+        div[data-testid="stSegmentedControl"] > div,
+        div[data-testid="stButtonGroup"] > div {
+            background: transparent !important;
+            border: none !important;
+            box-shadow: none !important;
+            padding: 0 !important;
+            gap: 5px !important;
+            width: 100% !important;
+        }
+        div[data-testid="stSegmentedControl"] button,
+        div[data-testid="stButtonGroup"] button {
+            background: transparent !important;
+            border: none !important;
+            box-shadow: none !important;
+            color: #23533a !important;
+            font-weight: 600 !important;
+            border-radius: 10px !important;
+            min-height: 36px !important;
+        }
+        button[kind="segmented_controlActive"],
+        button[data-testid="stBaseButton-segmented_controlActive"],
+        div[data-testid="stSegmentedControl"] button[aria-checked="true"],
+        div[data-testid="stSegmentedControl"] button[aria-pressed="true"],
+        div[data-testid="stButtonGroup"] button[aria-checked="true"],
+        div[data-testid="stButtonGroup"] button[aria-pressed="true"] {
+            background: linear-gradient(135deg, #14532d 0%, #166534 100%) !important;
+            color: #ffffff !important;
+            border: none !important;
+            font-weight: 700 !important;
+            box-shadow: 0 3px 10px rgba(20, 83, 45, 0.28) !important;
+        }
+        button[kind="segmented_controlActive"] p,
+        button[kind="segmented_controlActive"] span,
+        button[data-testid="stBaseButton-segmented_controlActive"] p,
+        button[data-testid="stBaseButton-segmented_controlActive"] span,
+        div[data-testid="stSegmentedControl"] button[aria-checked="true"] p,
+        div[data-testid="stSegmentedControl"] button[aria-checked="true"] span,
+        div[data-testid="stSegmentedControl"] button[aria-pressed="true"] p,
+        div[data-testid="stSegmentedControl"] button[aria-pressed="true"] span {
+            color: #ffffff !important;
+            font-weight: 700 !important;
+        }
+        /* Tier 2: Secondary vs primary action buttons */
+        div[data-testid="stButton"] > button[kind="secondary"] {
+            background: #f0f8f3 !important;
+            color: #166534 !important;
+            border: 1px solid #b6d9c4 !important;
+            border-radius: 999px !important;
+            font-weight: 600 !important;
+            font-size: 0.82rem !important;
+            min-height: 34px !important;
+            padding: 0.28rem 0.85rem !important;
+            box-shadow: 0 1px 2px rgba(22, 101, 52, 0.05) !important;
+        }
+        div[data-testid="stButton"] > button[kind="secondary"]:hover {
+            background: #dcf0e4 !important;
+            border-color: #16a34a !important;
+            color: #0f3d22 !important;
+            transform: translateY(-1px);
+        }
+        div[data-testid="stButton"] > button[kind="primary"] {
+            border-radius: 999px !important;
+            background: linear-gradient(135deg, #16a34a 0%, #15803d 100%) !important;
+            color: #ffffff !important;
+            min-height: 36px !important;
+            font-weight: 700 !important;
+            box-shadow: 0 3px 10px rgba(22, 163, 74, 0.25) !important;
+        }
+        /* Tier 3: Expanders — soft tinted collapsible drawers */
+        div[data-testid="stExpander"],
+        div[data-testid="stExpander"] details {
+            background: #ebf6ef !important;
+            border: 1px solid #c6e2d1 !important;
+            border-radius: 10px !important;
+            box-shadow: none !important;
+        }
+        div[data-testid="stExpander"] summary {
+            padding: 0.45rem 0.85rem !important;
+            font-size: 0.82rem !important;
+            font-weight: 600 !important;
+            color: #1e4d33 !important;
+        }
+        /* Tier 4: Chat messages — distinct user vs assistant surfaces */
+        div[data-testid="stChatMessage"] {
+            border-radius: 14px !important;
+            padding: 0.85rem 1.1rem !important;
+            margin-bottom: 0.65rem !important;
+            background: #ffffff !important;
+            border: 1px solid #dcebe2 !important;
+            box-shadow: 0 2px 6px rgba(15, 46, 29, 0.03) !important;
+        }
+        div[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {
+            background: #e3f5ea !important;
+            border: 1px solid #bce2ca !important;
+        }
+        div[data-testid="stChatMessage"] div[data-testid="stExpander"] {
+            background: #f5faf7 !important;
+            border: 1px dashed #c5dfd0 !important;
+            border-radius: 8px !important;
+            margin-top: 0.35rem !important;
+        }
+        /* Tier 5: Unified chat card classes */
+        div[data-testid="stVerticalBlockBorderWrapper"] {
+            background: #ffffff !important;
+            border: 1.5px solid #cde2d5 !important;
+            border-radius: 18px !important;
+            box-shadow: 0 6px 22px rgba(15, 46, 29, 0.06) !important;
+        }
+        .sc-chat-card-header {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.15rem 0.2rem;
+        }
+        .sc-chat-avatar-badge {
+            width: 40px;
+            height: 40px;
+            border-radius: 12px;
+            background: linear-gradient(135deg, #14532d 0%, #166534 100%);
+            color: #ffffff;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+            box-shadow: 0 3px 8px rgba(20, 83, 45, 0.22);
+            flex-shrink: 0;
+        }
+        .sc-quick-label {
+            font-size: 0.75rem;
+            font-weight: 700;
+            color: #3b634c;
+            letter-spacing: 0.03em;
+            margin: 0.25rem 0 0.3rem 0.15rem;
+        }
+        .sc-trace-box {
+            font-size: 0.82rem;
+            color: var(--ink-secondary);
+            line-height: 1.5;
+        }
         </style>
         """
     )

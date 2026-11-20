@@ -583,8 +583,7 @@ def _render_header(dna: LearnerDNA) -> None:
             st.markdown(f"**{dna.name}**")
             st.caption(f"Trình độ hiện tại: {dna.overall_level}")
             st.button(
-                "Đăng xuất / Đổi tài khoản",
-                icon=":material/logout:",
+                "🚪 Đăng xuất",
                 key="btn_logout",
                 on_click=_logout,
                 width="stretch",
@@ -598,8 +597,9 @@ def _render_header(dna: LearnerDNA) -> None:
             ):
                 st.toast("Đã đặt lại tiến độ của tài khoản hiện tại.")
     with c_rep:
+        dash_open = st.session_state.get("show_dashboard_strip", True)
         st.button(
-            "📊 Báo cáo học tập",
+            "✖ Đóng hồ sơ" if dash_open else "📊 Hồ sơ & Cài đặt",
             key="btn_toggle_dashboard",
             on_click=_toggle_dashboard_strip,
             width="stretch",
@@ -1393,22 +1393,33 @@ def _render_tab_coach(dna: LearnerDNA) -> None:
     if _is_demo_mode():
         st.warning("Chưa có AI Portal API key — hãy nhập key trong ⚙️ Cài đặt để Gia sư trả lời bằng AI Portal Live.")
 
-    with st.container():
-        ch_head, ch_focus, ch_reset = st.columns([8, 2, 3], vertical_alignment="center")
+    with st.container(border=True):
+        ch_head, ch_focus, ch_reset = st.columns([7.4, 1.8, 2.2], vertical_alignment="center")
         with ch_head:
             status_html = (
-                '<span style="color:#16a34a;font-weight:600;">● Trực tuyến</span>'
+                '<span style="display:inline-flex;align-items:center;gap:4px;background:#e6f6ec;color:#15803d;border:1px solid #bbf7d0;padding:1px 8px;border-radius:999px;font-size:0.74rem;font-weight:700;">● Trực tuyến</span>'
                 if not _is_demo_mode()
-                else '<span style="color:#d97706;font-weight:600;">● Chưa kết nối</span>'
+                else '<span style="display:inline-flex;align-items:center;gap:4px;background:#fef3c7;color:#b45309;border:1px solid #fde68a;padding:1px 8px;border-radius:999px;font-size:0.74rem;font-weight:700;">● Chưa kết nối</span>'
             )
             st.markdown(
-                f'<div class="sc-chat-ws-header"><b>Study Coach AI</b> &nbsp;·&nbsp; {status_html}</div>',
+                clean_html(
+                    f"""
+                    <div class="sc-chat-card-header" style="display:flex;align-items:center;justify-content:flex-start;gap:0.75rem;background:transparent;padding:0.15rem 0.2rem;box-shadow:none;margin:0;">
+                      <div class="sc-chat-avatar-badge" style="width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,#14532d 0%,#166534 100%);color:#ffffff;display:inline-flex;align-items:center;justify-content:center;font-size:1.2rem;box-shadow:0 3px 8px rgba(20,83,45,0.22);flex-shrink:0;">🤖</div>
+                      <div>
+                        <div style="display:flex;align-items:center;gap:0.5rem;font-weight:800;font-size:1.02rem;color:#0f2e1d;">
+                          <span>Study Coach AI</span> {status_html}
+                        </div>
+                        <div style="font-size:0.77rem;color:#4b6e58;margin-top:1px;">Gia sư Socratic thích ứng theo tài liệu của bạn</div>
+                      </div>
+                    </div>
+                    """
+                ),
                 unsafe_allow_html=True,
             )
         with ch_focus:
             st.button(
-                "Thu nhỏ" if focus_mode else "Phóng to",
-                icon=":material/close_fullscreen:" if focus_mode else ":material/open_in_full:",
+                "🗕 Thu nhỏ" if focus_mode else "⛶ Phóng to",
                 key="btn_chat_focus",
                 on_click=_toggle_chat_focus,
                 width="stretch",
@@ -1419,15 +1430,18 @@ def _render_tab_coach(dna: LearnerDNA) -> None:
                 db.clear_chat_history(dna.learner_id, st.session_state.doc_id)
 
             if st.button(
-                "Bắt đầu lại cuộc trò chuyện",
-                icon=":material/restart_alt:",
+                "🔄 Làm mới chat",
                 key="btn_clear_chat",
                 on_click=_clear_chat_cb,
                 width="stretch",
             ):
                 st.toast("Đã bắt đầu lại cuộc trò chuyện.")
 
-        chat_box = st.container(height=chat_height, border=True)
+        st.markdown(
+            '<hr style="margin:0.4rem 0 0.55rem 0;border:none;border-top:1.5px solid #e2efe7;">',
+            unsafe_allow_html=True,
+        )
+        chat_box = st.container(height=chat_height, border=False)
         with chat_box:
             if not history:
                 st.info(
@@ -1447,7 +1461,16 @@ def _render_tab_coach(dna: LearnerDNA) -> None:
                             if turn.citations:
                                 st.markdown(render_citation_pills_html(turn.citations), unsafe_allow_html=True)
                             if turn.follow_up_question:
-                                st.info(f"**Câu hỏi Socratic dành cho bạn:** {turn.follow_up_question}")
+                                st.markdown(
+                                    clean_html(
+                                        f"""
+                                        <div style="background:#eef8f2;border-left:3.5px solid #16a34a;padding:0.55rem 0.85rem;border-radius:0 8px 8px 0;margin-top:0.5rem;font-size:0.86rem;color:#133822;">
+                                          <b>💡 Câu hỏi Socratic dành cho bạn:</b> {esc(turn.follow_up_question)}
+                                        </div>
+                                        """
+                                    ),
+                                    unsafe_allow_html=True,
+                                )
                             if turn.suggested_quiz_topic:
                                 st.button(
                                     f"Luyện ngay Quiz chủ đề '{turn.suggested_quiz_topic}'",
@@ -1457,14 +1480,30 @@ def _render_tab_coach(dna: LearnerDNA) -> None:
                                     on_click=_jump_to_quiz_topic,
                                     args=(turn.suggested_quiz_topic,),
                                 )
-                            with st.expander("Luồng quyết định LangGraph & Function Calling", icon=":material/route:", expanded=False):
-                                st.write(f"**Lý do chọn nhánh:** {turn.pedagogical_reason}")
-                                for tr in turn.tool_traces:
-                                    st.markdown(f"- `{tr.tool_name}` — {tr.summary}")
-                            if turn.retrieved_chunks:
-                                with st.expander("Đoạn tài liệu nguồn đã đối chiếu (FAISS RAG)", icon=":material/menu_book:", expanded=False):
-                                    for ch in turn.retrieved_chunks:
-                                        st.markdown(f"**{ch.page}** · `{ch.source}` (độ khớp `{ch.score:.2f}`)\n\n> {ch.content}")
+                            if turn.tool_traces or turn.retrieved_chunks:
+                                with st.expander(
+                                    "🔍 Chi tiết suy luận & Nguồn tài liệu đối chiếu",
+                                    icon=":material/manage_search:",
+                                    expanded=False,
+                                ):
+                                    if turn.tool_traces:
+                                        st.markdown(
+                                            clean_html(
+                                                f"""
+                                                <div class="sc-trace-box">
+                                                  <b>Lý do chọn nhánh:</b> {esc(turn.pedagogical_reason)}
+                                                </div>
+                                                """
+                                            ),
+                                            unsafe_allow_html=True,
+                                        )
+                                        for tr in turn.tool_traces:
+                                            st.markdown(f"- `{tr.tool_name}` — {tr.summary}")
+                                    if turn.retrieved_chunks:
+                                        if turn.tool_traces:
+                                            st.divider()
+                                        for ch in turn.retrieved_chunks:
+                                            st.markdown(f"**{ch.page}** · `{ch.source}` (độ khớp `{ch.score:.2f}`)\n\n> {ch.content}")
                         else:
                             st.markdown(msg["content"])
 
@@ -1473,21 +1512,26 @@ def _render_tab_coach(dna: LearnerDNA) -> None:
         first_topic = _cmap.concepts[0].name if (_cmap and _cmap.concepts) else "khái niệm chính"
         short_first = first_topic if len(first_topic) <= 24 else first_topic[:22] + "…"
         prompt_clicked: str | None = None
+        st.markdown(
+            '<hr style="margin:0.35rem 0 0.45rem 0;border:none;border-top:1px solid #e2efe7;">',
+            unsafe_allow_html=True,
+        )
+        st.markdown('<div class="sc-quick-label">⚡ Gợi ý hỏi nhanh:</div>', unsafe_allow_html=True)
         qb1, qb2, qb3 = st.columns(3)
         with qb1:
-            btn1_label = "Giải thích Chunking" if is_sample_doc else f"Giải thích {short_first}"
+            btn1_label = "📖 Giải thích: Chunking" if is_sample_doc else f"📖 Giải thích: {short_first}"
             btn1_prompt = (
                 "Giải thích Chunking và Overlap trong RAG là gì?"
                 if is_sample_doc
                 else f"Hãy giảng cho tôi chủ đề '{first_topic}' theo đúng trình độ hiện tại của tôi."
             )
-            if st.button(btn1_label, icon=":material/school:", key="qp_chunk", help=f"Hỏi về {first_topic}", width="stretch"):
+            if st.button(btn1_label, key="qp_chunk", help=f"Hỏi về {first_topic}", width="stretch"):
                 prompt_clicked = btn1_prompt
         with qb2:
-            if st.button("Gỡ lỗi phần yếu nhất", icon=":material/troubleshoot:", key="qp_weak", help=f"Xoáy vào chủ đề yếu: {weak_topic}", width="stretch"):
+            if st.button("🎯 Gỡ lỗi phần yếu nhất", key="qp_weak", help=f"Xoáy vào chủ đề yếu: {weak_topic}", width="stretch"):
                 prompt_clicked = f"Tôi thường bị nhầm phần {weak_topic}, hãy giảng và kiểm tra lại giúp tôi."
         with qb3:
-            if st.button("Hỏi ngoài tài liệu", icon=":material/shield:", key="qp_oos", help="Kiểm tra khả năng từ chối bịa đặt ngoài nguồn", width="stretch"):
+            if st.button("🛡️ Thử hỏi ngoài tài liệu", key="qp_oos", help="Kiểm tra khả năng từ chối bịa đặt ngoài nguồn", width="stretch"):
                 prompt_clicked = "Giá vàng hôm nay trên thị trường quốc tế là bao nhiêu?"
 
         with st.expander(
