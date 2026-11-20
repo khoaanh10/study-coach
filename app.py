@@ -519,6 +519,19 @@ def _render_login_screen() -> None:
                     st.rerun()
 
 
+def _toggle_dashboard_strip() -> None:
+    st.session_state.show_dashboard_strip = not st.session_state.get("show_dashboard_strip", True)
+
+
+def _toggle_chat_focus() -> None:
+    st.session_state.chat_focus_mode = not st.session_state.get("chat_focus_mode", False)
+
+
+def _reset_current_profile_cb() -> None:
+    db.reset_learner_profile(st.session_state.learner_id, st.session_state.doc_id)
+    _reset_learner_session_results()
+
+
 def _render_header(dna: LearnerDNA) -> None:
     """Header 1 hàng: brand · tài khoản · báo cáo học tập · cài đặt."""
     c_brand, c_acc, c_rep, c_cfg = st.columns([5.8, 2.3, 2.1, 1.4], vertical_alignment="center")
@@ -531,18 +544,28 @@ def _render_header(dna: LearnerDNA) -> None:
         with st.popover(f"👤 {dna.name}", width="stretch"):
             st.markdown(f"**{dna.name}**")
             st.caption(f"Trình độ hiện tại: {dna.overall_level}")
-            if st.button("Đăng xuất / Đổi tài khoản", icon=":material/logout:", key="btn_logout", width="stretch"):
-                _logout()
-                st.rerun()
-            if st.button("Làm mới tiến độ", icon=":material/restart_alt:", key="btn_reset_one", width="stretch"):
-                db.reset_learner_profile(st.session_state.learner_id, st.session_state.doc_id)
-                _reset_learner_session_results()
+            st.button(
+                "Đăng xuất / Đổi tài khoản",
+                icon=":material/logout:",
+                key="btn_logout",
+                on_click=_logout,
+                width="stretch",
+            )
+            if st.button(
+                "Làm mới tiến độ",
+                icon=":material/restart_alt:",
+                key="btn_reset_one",
+                on_click=_reset_current_profile_cb,
+                width="stretch",
+            ):
                 st.toast("Đã đặt lại tiến độ của tài khoản hiện tại.")
-                st.rerun()
     with c_rep:
-        if st.button("📊 Báo cáo học tập", key="btn_toggle_dashboard", width="stretch"):
-            st.session_state.show_dashboard_strip = not st.session_state.show_dashboard_strip
-            st.rerun()
+        st.button(
+            "📊 Báo cáo học tập",
+            key="btn_toggle_dashboard",
+            on_click=_toggle_dashboard_strip,
+            width="stretch",
+        )
     with c_cfg:
         with st.popover("⚙️ Cài đặt", width="stretch"):
             st.markdown("**AI Portal Live**")
@@ -1345,20 +1368,26 @@ def _render_tab_coach(dna: LearnerDNA) -> None:
                 unsafe_allow_html=True,
             )
         with ch_focus:
-            if st.button(
+            st.button(
                 "Thu nhỏ" if focus_mode else "Phóng to",
                 icon=":material/close_fullscreen:" if focus_mode else ":material/open_in_full:",
                 key="btn_chat_focus",
+                on_click=_toggle_chat_focus,
                 width="stretch",
-            ):
-                st.session_state.chat_focus_mode = not focus_mode
-                st.rerun()
+            )
         with ch_reset:
-            if st.button("Bắt đầu lại cuộc trò chuyện", icon=":material/restart_alt:", key="btn_clear_chat", width="stretch"):
+            def _clear_chat_cb() -> None:
                 histories[_chat_key(dna)] = []
                 db.clear_chat_history(dna.learner_id, st.session_state.doc_id)
+
+            if st.button(
+                "Bắt đầu lại cuộc trò chuyện",
+                icon=":material/restart_alt:",
+                key="btn_clear_chat",
+                on_click=_clear_chat_cb,
+                width="stretch",
+            ):
                 st.toast("Đã bắt đầu lại cuộc trò chuyện.")
-                st.rerun()
 
         chat_box = st.container(height=chat_height, border=True)
         with chat_box:

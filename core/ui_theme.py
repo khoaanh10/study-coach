@@ -111,6 +111,14 @@ def inject_theme_css() -> str:
             width: 100% !important;
             padding: 2.8rem 2rem 1.2rem 2rem !important;
         }
+        [data-stale="true"],
+        div[data-stale="true"],
+        .stElementContainer[data-stale="true"],
+        div[data-testid="stAppViewBlockContainer"] [data-stale="true"] {
+            opacity: 1 !important;
+            filter: none !important;
+            transition: none !important;
+        }
         section[data-testid="stSidebar"],
         div[data-testid="stSidebarCollapsedControl"],
         button[data-testid="stExpandSidebarButton"],
