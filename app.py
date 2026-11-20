@@ -529,12 +529,14 @@ def _render_login_screen() -> None:
             if not (username or "").strip() or not password:
                 st.warning("Hãy nhập tên đăng nhập và mật khẩu.")
             else:
-                lid = db.authenticate_user(username.strip(), password)
+                with st.spinner("🔐 Đang xác thực tài khoản và tải không gian học tập..."):
+                    lid = db.authenticate_user(username.strip(), password)
+                    if lid:
+                        _apply_api_key()
+                        _do_login(lid, start_placement=False)
                 if not lid:
                     st.error("Sai tên đăng nhập hoặc mật khẩu.")
                 else:
-                    _apply_api_key()
-                    _do_login(lid, start_placement=False)
                     st.rerun()
         elif submitted_register:
             if not (reg_username or "").strip() or not reg_password:
@@ -543,14 +545,15 @@ def _render_login_screen() -> None:
                 st.error("Mật khẩu nhập lại không khớp.")
             else:
                 try:
-                    lid = db.register_user(
-                        reg_username.strip(), reg_password, display_name=(reg_display or "").strip()
-                    )
+                    with st.spinner("✨ Đang tạo tài khoản và khởi tạo không gian học tập..."):
+                        lid = db.register_user(
+                            reg_username.strip(), reg_password, display_name=(reg_display or "").strip()
+                        )
+                        _apply_api_key()
+                        _do_login(lid, start_placement=True)
                 except ValueError as exc:
                     st.error(str(exc))
                 else:
-                    _apply_api_key()
-                    _do_login(lid, start_placement=True)
                     st.rerun()
 
 
