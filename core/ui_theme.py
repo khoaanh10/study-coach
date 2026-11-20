@@ -109,7 +109,7 @@ def inject_theme_css() -> str:
         .block-container {
             max-width: 100% !important;
             width: 100% !important;
-            padding: 0.9rem 2rem 1.2rem 2rem !important;
+            padding: 2.8rem 2rem 1.2rem 2rem !important;
         }
         section[data-testid="stSidebar"],
         div[data-testid="stSidebarCollapsedControl"],
