@@ -1,25 +1,25 @@
-"""Sinh và chấm quiz trắc nghiệm từ một đoạn văn bản."""
+"""Sinh và chấm quiz trắc nghiệm thích ứng từ văn bản tài liệu và Learner DNA."""
+from __future__ import annotations
+
+import re
+
 from pydantic import BaseModel
 
 import config
-from core.contracts import GradedQuestion, Question, Quiz, QuizResult
+from core.contracts import (
+    GradedQuestion,
+    LearnerDNA,
+    Question,
+    Quiz,
+    QuizResult,
+)
+from core.demo_provider import demo_generate_quiz
 from core.llm import LLMError, complete_structured
-
-SYSTEM_PROMPT = (
-    "Bạn là giáo viên ra đề trắc nghiệm. Chỉ dựa trên VĂN BẢN người dùng cung cấp, "
-    "không dùng kiến thức bên ngoài. Mỗi câu có đúng 4 đáp án, chỉ 1 đáp án đúng, "
-    "các đáp án sai phải hợp lý nhưng rõ ràng sai theo văn bản. "
-    "Viết câu hỏi bằng cùng ngôn ngữ với văn bản. "
-    "Với mỗi câu, làm theo thứ tự: (1) chọn một câu trong văn bản làm bằng chứng và chép "
-    "NGUYÊN VĂN vào evidence; (2) viết đáp án đúng khớp chính xác với bằng chứng đó; "
-    "(3) explanation giải thích ngắn dựa trên evidence; (4) correct_index (0 đến 3) là vị trí "
-    "của đáp án khớp với evidence. "
-    "Cẩn thận với các ý đối lập trong văn bản (ví dụ 'quá lớn' và 'quá nhỏ', 'trước' và 'sau'): "
-    "không được gán nguyên nhân hay hậu quả của ý này cho ý kia. "
-    "Chỉ hỏi 'vì sao' khi văn bản có nêu rõ lý do; đáp án đúng không được lặp lại nguyên câu hỏi. "
-    "Nếu văn bản vô nghĩa (ký tự gõ bừa, chuỗi lặp lại) hoặc không chứa thông tin, kiến thức nào "
-    "để hỏi, trả về questions là danh sách rỗng. Không bịa câu hỏi, không hỏi về hình thức của "
-    "văn bản (ký tự nào xuất hiện, lặp bao nhiêu lần)."
+from core.prompts import (
+    DIFFICULTY_HINTS,
+    GATE_PROMPT,
+    SYSTEM_PROMPT,
+    VERIFY_PROMPT,
 )
 
 NO_CONTENT_MESSAGE = (
@@ -47,27 +47,34 @@ def _looks_meaningless(text: str) -> bool:
     with_vowel = sum(any(c in _VOWELS for c in w) for w in words)
     return with_vowel < len(words) * 0.7
 
-DIFFICULTY_HINTS = {
-    "Dễ": (
-        "Câu hỏi nhớ lại một thông tin nêu trực tiếp trong văn bản (định nghĩa, tên gọi, con số). "
-        "Đáp án sai khác hẳn đáp án đúng."
-    ),
-    "Trung bình": (
-        "Câu hỏi cần hiểu ý chính: hỏi vì sao, để làm gì, khác nhau thế nào. "
-        "Không hỏi lại định nghĩa theo đúng câu chữ trong văn bản."
-    ),
-    "Khó": (
-        "KHÔNG hỏi định nghĩa và không hỏi lại một câu có sẵn trong văn bản. Mỗi câu phải thuộc "
-        "một trong các dạng: đưa ra một tình huống cụ thể mới rồi hỏi nên làm gì hoặc điều gì xảy ra; "
-        "so sánh hai khái niệm trong văn bản; suy ra hệ quả từ ít nhất hai ý ở hai chỗ khác nhau. "
-        "Cả 4 đáp án đều dùng thuật ngữ trong văn bản và dài tương đương nhau, đáp án sai chỉ sai ở "
-        "một chi tiết."
-    ),
+
+_CURLY_QUOTES = {
+    "\u2018": "'",
+    "\u2019": "'",
+    "\u201a": "'",
+    "\u201b": "'",
+    "\u201c": '"',
+    "\u201d": '"',
+    "\u201e": '"',
+    "\u201f": '"',
+}
+_DASHES = {
+    "\u2010": "-",
+    "\u2011": "-",
+    "\u2012": "-",
+    "\u2013": "-",
+    "\u2014": "-",
+    "\u2015": "-",
+    "\u2212": "-",
 }
 
 
 def _norm(s: str) -> str:
-    return " ".join(s.lower().split()).strip(" .\"'“”")
+    """Chuẩn hóa văn bản để so khớp: quotes thẳng, bỏ ngắt dòng PDF, gom khoảng trắng."""
+    text = s.translate({**_CURLY_QUOTES, **_DASHES})
+    text = text.replace("-\r\n", "").replace("-\n", "")
+    text = re.sub(r"\s+", " ", text)
+    return text.lower().strip(" .\"'")
 
 
 def _is_grounded(q: Question, source: str) -> bool:
@@ -86,18 +93,48 @@ def generate_quiz(
     difficulty: str = "Trung bình",
     model: str | None = None,
     max_attempts: int = 2,
+    demo_mode: bool = False,
+    focus_topic: str | None = None,
+    learner_dna: LearnerDNA | None = None,
 ) -> Quiz:
     text = text.strip()
     if len(text) < 100:
         raise LLMError("Văn bản quá ngắn để ra quiz (cần ít nhất khoảng 100 ký tự).")
     text = text[: config.MAX_INPUT_CHARS]
-    if _looks_meaningless(text) or not _has_knowledge(text, model):
+    if _looks_meaningless(text):
         raise LLMError(NO_CONTENT_MESSAGE)
+
+    if demo_mode:
+        quiz = demo_generate_quiz(
+            text=text,
+            n=n,
+            difficulty=difficulty,
+            focus_topic=focus_topic,
+            learner_dna=learner_dna,
+        )
+        if not quiz.questions:
+            raise LLMError(NO_CONTENT_MESSAGE)
+        return quiz
+
+    if not _has_knowledge(text, model):
+        raise LLMError(NO_CONTENT_MESSAGE)
+
+    adaptive_note = ""
+    if focus_topic:
+        adaptive_note = (
+            f"\nƯU TIÊN CÁ NHÂN HÓA: Tập trung ít nhất một nửa số câu hỏi vào chủ đề '{focus_topic}'."
+        )
+    if learner_dna and learner_dna.active_misconceptions:
+        misc_txt = "; ".join(m.description for m in learner_dna.active_misconceptions[:2])
+        adaptive_note += (
+            f"\nĐIỂM YẾU NGƯỜI HỌC: Người học hay mắc lỗi tư duy ({misc_txt}); "
+            "hãy tạo đáp án nhiễu kiểm tra đúng ranh giới dễ nhầm này."
+        )
 
     user_prompt = (
         # Xin dư 2 câu để còn câu thay thế khi có câu bị loại ở bước kiểm tra.
         f"Hãy tạo {n + 2} câu trắc nghiệm, mức độ: {difficulty}. "
-        f"{DIFFICULTY_HINTS.get(difficulty, '')}\n\nVĂN BẢN:\n{text}"
+        f"{DIFFICULTY_HINTS.get(difficulty, '')}{adaptive_note}\n\nVĂN BẢN:\n{text}"
     )
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -131,20 +168,65 @@ def generate_quiz(
     return Quiz(questions=good[:n])
 
 
+def generate_adaptive_quiz(
+    text: str,
+    learner_dna: LearnerDNA,
+    n: int = 5,
+    focus_topic: str | None = None,
+    difficulty_override: str | None = None,
+    model: str | None = None,
+    demo_mode: bool = False,
+) -> tuple[Quiz, str]:
+    """Tự động chọn chủ đề yếu & độ khó phù hợp với hồ sơ Learner DNA rồi sinh quiz."""
+    chosen_focus = focus_topic
+    reason_parts: list[str] = []
+
+    if not chosen_focus:
+        if learner_dna.active_misconceptions:
+            chosen_focus = learner_dna.active_misconceptions[0].topic
+            reason_parts.append(f"xoáy vào chủ đề đang hiểu lệch '{chosen_focus}'")
+        else:
+            # Chọn khái niệm chưa vững có điểm thấp nhất (hoặc chưa học).
+            ranked = sorted(
+                learner_dna.concepts,
+                key=lambda c: (0 if c.status == "misconception" else (1 if c.attempts > 0 else 2), c.mastery_score),
+            )
+            if ranked:
+                chosen_focus = ranked[0].concept
+                reason_parts.append(f"tập trung củng cố mục '{chosen_focus}' ({ranked[0].mastery_score:.0f}%)")
+
+    if difficulty_override and difficulty_override in config.DIFFICULTIES:
+        chosen_diff = difficulty_override
+        reason_parts.append(f"độ khó chọn tay '{chosen_diff}'")
+    else:
+        focus_score = next(
+            (c.mastery_score for c in learner_dna.concepts if c.concept == chosen_focus),
+            learner_dna.mastery_avg,
+        )
+        if learner_dna.overall_level == "Nâng cao" and focus_score >= 65:
+            chosen_diff = "Khó"
+        elif learner_dna.overall_level == "Mới bắt đầu" or focus_score < 35:
+            chosen_diff = "Dễ"
+        else:
+            chosen_diff = "Trung bình"
+        reason_parts.append(f"tự điều chỉnh mức '{chosen_diff}' theo trình độ {learner_dna.overall_level}")
+
+    quiz = generate_quiz(
+        text=text,
+        n=n,
+        difficulty=chosen_diff,
+        model=model,
+        demo_mode=demo_mode,
+        focus_topic=chosen_focus,
+        learner_dna=learner_dna,
+    )
+    strategy = "Hệ thống đã " + " và ".join(reason_parts) + "."
+    return quiz, strategy
+
+
 class _Gate(BaseModel):
     reason: str  # lập luận ngắn, viết trước khi kết luận
     has_knowledge: bool
-
-
-GATE_PROMPT = (
-    "Bạn kiểm tra đầu vào cho một công cụ ra đề trắc nghiệm ôn tập. Đọc VĂN BẢN và quyết định nó có "
-    "phải là tài liệu chứa thông tin, kiến thức để học và ra câu hỏi hay không. "
-    "has_knowledge=true khi văn bản trình bày sự kiện, khái niệm, quy trình, số liệu hoặc lập luận "
-    "(bài học, ghi chú, bài báo, tài liệu kỹ thuật, kể cả viết chưa trau chuốt). "
-    "has_knowledge=false khi văn bản là: ký tự gõ bừa; các từ ngẫu nhiên không ghép thành câu có nghĩa; "
-    "văn bản giữ chỗ như lorem ipsum; lời tán gẫu, than thở, chào hỏi không có thông tin gì để học. "
-    "Viết reason một câu rồi mới đặt has_knowledge."
-)
 
 
 def _has_knowledge(text: str, model: str | None) -> bool:
@@ -166,22 +248,6 @@ class _Check(BaseModel):
 
 class _Checks(BaseModel):
     checks: list[_Check]
-
-
-VERIFY_PROMPT = (
-    "Bạn là người soát đề trắc nghiệm, rất khắt khe. Với mỗi câu, bạn nhận CÂU HỎI và ĐÁP ÁN ĐƯỢC "
-    "CHỌN LÀ ĐÚNG. Chỉ dựa trên VĂN BẢN, kiểm tra xem văn bản có NÓI RÕ điều đó không. "
-    "Đặt supported=false nếu gặp một trong các trường hợp: "
-    "(a) văn bản không nêu thông tin mà đáp án khẳng định (kể cả khi nghe hợp lý theo kiến thức chung); "
-    "(b) câu hỏi hỏi lý do nhưng văn bản không nêu lý do; "
-    "(c) đáp án lấy đặc điểm của một ý khác trong văn bản, ví dụ văn bản nói 'A gây ra X, còn B gây ra Y' "
-    "mà đáp án lại nói A gây ra Y; "
-    "(d) đáp án chỉ lặp lại câu hỏi; "
-    "(e) văn bản vô nghĩa, hoặc câu hỏi chỉ hỏi về hình thức của văn bản (ký tự, từ nào xuất hiện) "
-    "chứ không hỏi về một thông tin, kiến thức. "
-    "Với mỗi câu, viết reason (một câu, trích phần văn bản liên quan) rồi mới đặt supported. "
-    "Trả về checks theo đúng thứ tự và đúng số lượng câu hỏi."
-)
 
 
 def _verify(questions: list[Question], text: str, model: str | None) -> list[bool]:
@@ -207,23 +273,79 @@ def _verify(questions: list[Question], text: str, model: str | None) -> list[boo
     return [c.supported for c in got]
 
 
-def grade(quiz: Quiz, answers: list[int | None]) -> QuizResult:
+def grade(
+    quiz: Quiz,
+    answers: list[int | None],
+    confidences: list[str] | None = None,
+) -> QuizResult:
     """answers[i] là chỉ số đáp án đã chọn cho câu i, hoặc None nếu bỏ trống."""
-    items = []
+    items: list[GradedQuestion] = []
+    weak_topics: list[str] = []
+    detected_misc: list[str] = []
+    blind_spots = 0
+    lucky_guesses = 0
+
     for i, q in enumerate(quiz.questions):
         chosen = answers[i] if i < len(answers) else None
+        conf = (confidences[i] if confidences and i < len(confidences) else "Bình thường") or "Bình thường"
+        is_ok = chosen == q.correct_index
+        diagnosed = ""
+
+        if is_ok:
+            if conf == "Đoán mò":
+                cal_tag = "Đúng do đoán mò (Kiến thức giả)"
+                lucky_guesses += 1
+            else:
+                cal_tag = "Vững thực chất"
+        else:
+            if q.topic and q.topic not in weak_topics:
+                weak_topics.append(q.topic)
+            if chosen is None:
+                diagnosed = "Bỏ trống — cần kiểm tra lại khái niệm này"
+                cal_tag = "Biết mình chưa biết"
+            else:
+                if conf == "Chắc chắn":
+                    cal_tag = "Điểm mù tự tin sai"
+                    blind_spots += 1
+                else:
+                    cal_tag = "Biết mình chưa biết"
+                if q.option_diagnostics and 0 <= chosen < len(q.option_diagnostics):
+                    cand = q.option_diagnostics[chosen].strip()
+                    if cand and cand.lower() != "chính xác":
+                        diagnosed = cand
+                        if cand not in detected_misc:
+                            detected_misc.append(cand)
+
         items.append(
             GradedQuestion(
                 question=q.question,
                 options=q.options,
                 chosen_index=chosen,
                 correct_index=q.correct_index,
-                is_correct=chosen == q.correct_index,
+                is_correct=is_ok,
                 explanation=q.explanation,
+                topic=q.topic,
+                bloom_level=q.bloom_level,
+                evidence=q.evidence,
+                page_ref=q.page_ref,
+                diagnosed_misconception=diagnosed,
+                confidence=conf,
+                calibration_tag=cal_tag,
             )
         )
+
+    score = sum(it.is_correct for it in items)
+    total = len(items)
+    ratio = score / total if total else 0.0
+    recommended_level = "Nâng cao" if ratio >= 0.8 else ("Trung bình" if ratio >= 0.5 else "Mới bắt đầu")
+
     return QuizResult(
-        score=sum(it.is_correct for it in items),
-        total=len(items),
+        score=score,
+        total=total,
         items=items,
+        weak_topics=weak_topics,
+        detected_misconceptions=detected_misc,
+        recommended_level=recommended_level,
+        blind_spot_count=blind_spots,
+        lucky_guess_count=lucky_guesses,
     )

@@ -1,0 +1,246 @@
+{
+  "total_questions": 20,
+  "schema_errors": [],
+  "evidence_errors": [],
+  "in_scope_recall": "16/16",
+  "source_citation_accuracy": "16/16",
+  "out_of_scope_refusal": "4/4",
+  "overall_retrieval_pass_rate": 100.0,
+  "avg_retrieval_latency_ms": 0.68,
+  "baseline_comparison": [
+    {
+      "name": "Đối chứng (Chunk=1400, Overlap=0, cùng metadata, không có cổng ngoài-tài-liệu)",
+      "in_scope_recall": "16/16",
+      "source_citation_accuracy": "16/16",
+      "out_of_scope_refusal": "0/4",
+      "overall_pass_rate": 80.0
+    },
+    {
+      "name": "Hiện tại (Dual-Memory RAG: Chunk=550, Overlap=90 + Metadata + Cổng ngoài-tài-liệu)",
+      "in_scope_recall": "16/16",
+      "source_citation_accuracy": "16/16",
+      "out_of_scope_refusal": "4/4",
+      "overall_pass_rate": 100.0
+    }
+  ],
+  "holdout": {
+    "available": true,
+    "in_scope_correct": "12/12",
+    "out_of_scope_refused": "11/12",
+    "overall_pass_rate": 95.8,
+    "failures": [
+      {
+        "id": "O-12",
+        "question": "So sánh hiệu năng giữa Python và Java?",
+        "in_scope": false
+      }
+    ]
+  },
+  "notes": [
+    "Chỉ đo truy xuất bằng embedding cục bộ; không đo độ đúng câu trả lời của LLM, độ trễ hay chi phí.",
+    "Bộ 20 câu đã dùng để chỉnh ngưỡng: điểm trên bộ này không phải ước lượng tổng quát hóa.",
+    "Dòng Đối chứng tắt cổng ngoài-tài-liệu có chủ đích nên không phản ánh một cải tiến đã đo độc lập."
+  ],
+  "details": [
+    {
+      "id": "EV-01",
+      "type": "trong_tai_lieu",
+      "difficulty": "Dễ",
+      "is_in_scope_pred": true,
+      "top_source": "rag-co-ban.txt",
+      "top_score": 0.432,
+      "passed": true,
+      "latency_ms": 0.8
+    },
+    {
+      "id": "EV-02",
+      "type": "trong_tai_lieu",
+      "difficulty": "Trung bình",
+      "is_in_scope_pred": true,
+      "top_source": "rag-co-ban.txt",
+      "top_score": 0.471,
+      "passed": true,
+      "latency_ms": 0.74
+    },
+    {
+      "id": "EV-03",
+      "type": "trong_tai_lieu",
+      "difficulty": "Trung bình",
+      "is_in_scope_pred": true,
+      "top_source": "rag-co-ban.txt",
+      "top_score": 0.323,
+      "passed": true,
+      "latency_ms": 0.48
+    },
+    {
+      "id": "EV-04",
+      "type": "trong_tai_lieu",
+      "difficulty": "Dễ",
+      "is_in_scope_pred": true,
+      "top_source": "rag-co-ban.txt",
+      "top_score": 0.337,
+      "passed": true,
+      "latency_ms": 0.5
+    },
+    {
+      "id": "EV-05",
+      "type": "trong_tai_lieu",
+      "difficulty": "Khó",
+      "is_in_scope_pred": true,
+      "top_source": "rag-co-ban.txt",
+      "top_score": 0.676,
+      "passed": true,
+      "latency_ms": 1.07
+    },
+    {
+      "id": "EV-06",
+      "type": "trong_tai_lieu",
+      "difficulty": "Trung bình",
+      "is_in_scope_pred": true,
+      "top_source": "rag-co-ban.txt",
+      "top_score": 0.53,
+      "passed": true,
+      "latency_ms": 0.83
+    },
+    {
+      "id": "EV-07",
+      "type": "trong_tai_lieu",
+      "difficulty": "Trung bình",
+      "is_in_scope_pred": true,
+      "top_source": "rag-co-ban.txt",
+      "top_score": 0.337,
+      "passed": true,
+      "latency_ms": 0.7
+    },
+    {
+      "id": "EV-08",
+      "type": "trong_tai_lieu",
+      "difficulty": "Khó",
+      "is_in_scope_pred": true,
+      "top_source": "rag-co-ban.txt",
+      "top_score": 0.332,
+      "passed": true,
+      "latency_ms": 0.58
+    },
+    {
+      "id": "EV-09",
+      "type": "trong_tai_lieu",
+      "difficulty": "Dễ",
+      "is_in_scope_pred": true,
+      "top_source": "openai-api-co-ban.txt",
+      "top_score": 0.177,
+      "passed": true,
+      "latency_ms": 0.38
+    },
+    {
+      "id": "EV-10",
+      "type": "trong_tai_lieu",
+      "difficulty": "Trung bình",
+      "is_in_scope_pred": true,
+      "top_source": "openai-api-co-ban.txt",
+      "top_score": 0.504,
+      "passed": true,
+      "latency_ms": 0.84
+    },
+    {
+      "id": "EV-11",
+      "type": "trong_tai_lieu",
+      "difficulty": "Dễ",
+      "is_in_scope_pred": true,
+      "top_source": "openai-api-co-ban.txt",
+      "top_score": 0.458,
+      "passed": true,
+      "latency_ms": 0.75
+    },
+    {
+      "id": "EV-12",
+      "type": "trong_tai_lieu",
+      "difficulty": "Khó",
+      "is_in_scope_pred": true,
+      "top_source": "openai-api-co-ban.txt",
+      "top_score": 0.194,
+      "passed": true,
+      "latency_ms": 0.63
+    },
+    {
+      "id": "EV-13",
+      "type": "trong_tai_lieu",
+      "difficulty": "Trung bình",
+      "is_in_scope_pred": true,
+      "top_source": "rag-co-ban.txt",
+      "top_score": 0.403,
+      "passed": true,
+      "latency_ms": 0.84
+    },
+    {
+      "id": "EV-14",
+      "type": "trong_tai_lieu",
+      "difficulty": "Trung bình",
+      "is_in_scope_pred": true,
+      "top_source": "openai-api-co-ban.txt",
+      "top_score": 0.295,
+      "passed": true,
+      "latency_ms": 0.58
+    },
+    {
+      "id": "EV-15",
+      "type": "trong_tai_lieu",
+      "difficulty": "Khó",
+      "is_in_scope_pred": true,
+      "top_source": "openai-api-co-ban.txt",
+      "top_score": 0.553,
+      "passed": true,
+      "latency_ms": 0.64
+    },
+    {
+      "id": "EV-16",
+      "type": "trong_tai_lieu",
+      "difficulty": "Dễ",
+      "is_in_scope_pred": true,
+      "top_source": "openai-api-co-ban.txt",
+      "top_score": 0.679,
+      "passed": true,
+      "latency_ms": 0.8
+    },
+    {
+      "id": "EV-17",
+      "type": "ngoai_tai_lieu",
+      "difficulty": "Khó",
+      "is_in_scope_pred": false,
+      "top_source": "openai-api-co-ban.txt",
+      "top_score": 0.263,
+      "passed": true,
+      "latency_ms": 0.6
+    },
+    {
+      "id": "EV-18",
+      "type": "ngoai_tai_lieu",
+      "difficulty": "Trung bình",
+      "is_in_scope_pred": false,
+      "top_source": "openai-api-co-ban.txt",
+      "top_score": 0.188,
+      "passed": true,
+      "latency_ms": 0.5
+    },
+    {
+      "id": "EV-19",
+      "type": "ngoai_tai_lieu",
+      "difficulty": "Dễ",
+      "is_in_scope_pred": false,
+      "top_source": "openai-api-co-ban.txt",
+      "top_score": 0.27,
+      "passed": true,
+      "latency_ms": 0.76
+    },
+    {
+      "id": "EV-20",
+      "type": "ngoai_tai_lieu",
+      "difficulty": "Trung bình",
+      "is_in_scope_pred": false,
+      "top_source": "openai-api-co-ban.txt",
+      "top_score": 0.18,
+      "passed": true,
+      "latency_ms": 0.49
+    }
+  ]
+}

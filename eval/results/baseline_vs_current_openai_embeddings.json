@@ -1,0 +1,16 @@
+[
+  {
+    "name": "Đối chứng (Chunk=1400, Overlap=0, cùng metadata, không có cổng ngoài-tài-liệu)",
+    "in_scope_recall": "16/16",
+    "source_citation_accuracy": "16/16",
+    "out_of_scope_refusal": "0/4",
+    "overall_pass_rate": 80.0
+  },
+  {
+    "name": "Hiện tại (Dual-Memory RAG: Chunk=550, Overlap=90 + Metadata + Cổng ngoài-tài-liệu)",
+    "in_scope_recall": "16/16",
+    "source_citation_accuracy": "16/16",
+    "out_of_scope_refusal": "4/4",
+    "overall_pass_rate": 100.0
+  }
+]
