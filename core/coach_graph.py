@@ -742,7 +742,20 @@ def _inspect_state(state: CoachState, kb: DualMemoryKnowledgeBase) -> dict:
         merged_mistakes: list[RetrievedChunk] = []
         prereq_gap = None
     elif conv_intent == "greeting_or_meta":
-        focus_name = dna.active_misconceptions[0].topic if dna.active_misconceptions else (cmap.concepts[0].name if cmap.concepts else state["query"])
+        mastery_map = {c.concept: c for c in dna.concepts}
+        first_foundation = next(
+            (
+                node.name
+                for node in cmap.concepts
+                if (node.name not in mastery_map) or mastery_map[node.name].attempts == 0 or mastery_map[node.name].mastery_score < 60
+            ),
+            "",
+        )
+        focus_name = first_foundation or (
+            dna.active_misconceptions[0].topic
+            if dna.active_misconceptions
+            else (cmap.concepts[0].name if cmap.concepts else state["query"])
+        )
         chunks = []
         in_scope = True
         traces.append(
@@ -1015,12 +1028,15 @@ def _resolve_live_prompt_spec(state: CoachState, route: str) -> tuple[str, str, 
         extra = (
             "Hãy tóm tắt đầy đủ các chủ đề trong tài liệu kèm nhãn [Trang/Mục]."
             if intent == "doc_summary"
-            else "Hãy chào học viên theo tên, nêu trình độ và chủ đề cần ưu tiên nhất dựa trên hồ sơ."
+            else (
+                f"Hãy chào học viên theo tên, nêu trình độ hiện tại ({level}, điểm TB {state['learner_dna'].mastery_avg:.0f}%) "
+                f"và gợi ý bắt đầu học ngay chủ đề nền tảng tiếp theo là '{state['topic']}' (theo đúng thứ tự lộ trình từ đầu tài liệu, không nhảy cóc qua chủ đề chưa học)."
+            )
         )
         reason = (
             "Học viên yêu cầu tóm tắt cấu trúc toàn bộ tài liệu đang nạp."
             if intent == "doc_summary"
-            else "Học viên chào hỏi hoặc hỏi về hồ sơ năng lực, điểm yếu và lộ trình cá nhân."
+            else f"Học viên chào hỏi hoặc hỏi về hồ sơ năng lực; đề xuất chủ đề tiếp theo theo lộ trình: '{state['topic']}'."
         )
         return "coach_guide", extra, reason
     if route == "bridge_prerequisite":
@@ -1052,10 +1068,25 @@ def _resolve_live_prompt_spec(state: CoachState, route: str) -> tuple[str, str, 
         )
     elif intent == "followup_example":
         reason = f"Nối tiếp mạch chủ đề '{state['topic']}'; đưa ví dụ thực tế minh họa theo trình độ '{level}'."
-        extra_inst += f" Học viên đang xin VÍ DỤ THỰC TẾ cho chủ đề '{state['topic']}'."
+        last_q = state.get("last_follow_up") or ""
+        extra_inst += (
+            f" Học viên đang xin VÍ DỤ THỰC TẾ cho chủ đề '{state['topic']}'"
+            + (f" (xoay quanh câu hỏi vừa đặt: \"{last_q}\"). " if last_q else ". ")
+            + "QUY TẮC BẮT BUỘC: (1) Không mở đầu bằng 'Rất tốt!'; (2) Đi thẳng vào 1-2 ví dụ cụ thể, ngắn gọn bám sát tài liệu; "
+            "(3) KHÔNG lặp lại phần định nghĩa lý thuyết hay mục 'Nhắc lại' đã giảng ở lượt trước; "
+            "(4) Kết thúc bằng 1 câu hỏi ngắn gắn trực tiếp với ví dụ vừa nêu (KHÔNG lặp lại câu hỏi cũ)."
+        )
     elif intent == "followup_elaborate":
-        reason = f"Nối tiếp mạch chủ đề '{state['topic']}'; đào sâu cơ chế hoạt động theo trình độ '{level}'."
-        extra_inst += f" Học viên muốn ĐÀO SÂU CƠ CHẾ chi tiết hơn cho chủ đề '{state['topic']}'."
+        reason = f"Nối tiếp mạch chủ đề '{state['topic']}'; giải đáp câu hỏi Socratic hoặc làm rõ ý theo trình độ '{level}'."
+        last_q = state.get("last_follow_up") or ""
+        extra_inst += (
+            f" Học viên vừa phản hồi '{state['query']}' về chủ đề '{state['topic']}'"
+            + (f" sau khi bạn hỏi: \"{last_q}\". " if last_q else ". ")
+            + "QUY TẮC BẮT BUỘC: (1) TUYỆT ĐỐI KHÔNG khen 'Rất tốt!' hay 'Tuyệt vời!' khi học viên nói không biết/chưa hiểu; "
+            "(2) TUYỆT ĐỐI KHÔNG giảng lại toàn bộ bài học từ đầu, không lặp lại các đoạn 'Giải thích từng bước' hay 'Nhắc lại' vừa nói ở lượt trước; "
+            "(3) Hãy giải đáp hoặc gợi ý trực tiếp, ngắn gọn (3-5 câu) cho chính câu hỏi bạn vừa đặt kèm 1 ví dụ cụ thể từ tài liệu; "
+            "(4) Kết thúc bằng MỘT câu hỏi kiểm tra MỚI dễ hơn và KHÁC hẳn câu hỏi cũ."
+        )
     else:
         reason = f"Câu hỏi nằm trong tài liệu; điều chỉnh giọng giảng và độ sâu kỹ thuật cho trình độ '{level}'."
     return prompt_key, extra_inst, reason
@@ -1070,7 +1101,7 @@ def _build_coach_openai_messages(state: CoachState, prompt_key: str, extra_instr
     concept_lines = []
     for node in state["concept_map"].concepts[:10]:
         m = mastery.get(node.name)
-        score = f" ({m.mastery_score:.0f}%)" if m and m.attempts > 0 else " (chưa học)"
+        score = f" ({m.mastery_score:.0f}%)" if m and m.attempts > 0 else " (0% - chưa học)"
         concept_lines.append(f"- {node.name}{score}")
     concepts_block = "\n".join(concept_lines) or "Chưa có khái niệm nào."
 
