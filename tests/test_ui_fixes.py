@@ -22,10 +22,18 @@ def _goto(at: AppTest, tab: str) -> AppTest:
     return at
 
 
+def _register(at: AppTest, username: str, password: str, display: str = "") -> AppTest:
+    at.text_input("reg_username_input").set_value(username)
+    at.text_input("reg_display_name_input").set_value(display)
+    at.text_input("reg_password_input").set_value(password)
+    at.text_input("reg_password2_input").set_value(password)
+    at.button("btn_register_submit").click().run()
+    return at
+
+
 def _login_and_load_sample(at: AppTest, name: str = "Học viên Test") -> AppTest:
-    """Đăng nhập thẳng bằng tên rồi nạp giáo trình mẫu RAG ở màn nạp tài liệu."""
-    at.text_input("login_name_input").set_value(name).run()
-    at.button("btn_login_direct").click().run()
+    """Đăng ký tài khoản mới rồi nạp giáo trình mẫu RAG ở màn nạp tài liệu."""
+    _register(at, "hocvien_test", "matkhau123", name)
     assert not at.exception
     at.button("btn_load_sample_onboarding").click().run()
     assert not at.exception
@@ -122,6 +130,8 @@ def _assert_friendly_error(at: AppTest) -> None:
 
 def test_live_llm_error_placement(live_app):
     at = live_app
+    # Đăng ký mới đã tự mở bài kiểm tra đầu vào (demo); bỏ qua nó để kiểm tra riêng lần sinh đề ở chế độ Live lỗi.
+    at.session_state["placement_quiz"] = None
     _goto(at, "map")
     at.button("btn_start_placement").click().run()
     _assert_friendly_error(at)
@@ -285,9 +295,9 @@ def test_account_switch_clears_previous_results(make_app):
     at.button("btn_logout").click().run()
     assert not at.exception
     assert at.session_state["has_document"] is False
-    at.text_input("login_name_input").set_value("Tài khoản khác").run()
-    at.button("btn_login_direct").click().run()
+    _register(at, "tai_khoan_khac", "matkhau456", "Tài khoản khác")
     assert not at.exception
+    assert at.session_state["logged_in_learner_id"]
     for k in ("diff_report", "incident_eval", "trojan_result", "adv_eval", "teach_back_eval", "quiz_result"):
         assert at.session_state[k] is None, k
 

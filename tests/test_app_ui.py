@@ -21,10 +21,18 @@ def _goto(at: AppTest, tab: str) -> AppTest:
     return at
 
 
+def _register(at: AppTest, username: str, password: str, display: str = "") -> AppTest:
+    at.text_input("reg_username_input").set_value(username)
+    at.text_input("reg_display_name_input").set_value(display)
+    at.text_input("reg_password_input").set_value(password)
+    at.text_input("reg_password2_input").set_value(password)
+    at.button("btn_register_submit").click().run()
+    return at
+
+
 def _login_and_load_sample(at: AppTest, name: str = "Học viên Test") -> AppTest:
-    """Đăng nhập thẳng bằng tên rồi nạp giáo trình mẫu RAG ở màn nạp tài liệu."""
-    at.text_input("login_name_input").set_value(name).run()
-    at.button("btn_login_direct").click().run()
+    """Đăng ký tài khoản mới rồi nạp giáo trình mẫu RAG ở màn nạp tài liệu."""
+    _register(at, "hocvien_test", "matkhau123", name)
     assert not at.exception
     at.button("btn_load_sample_onboarding").click().run()
     assert not at.exception
@@ -46,24 +54,44 @@ def test_login_screen_flow(tmp_path: Path, monkeypatch):
     at = _new_app(tmp_path, monkeypatch, "ui_login.db")
     # Chưa đăng nhập: chỉ có màn login.
     assert not at.session_state["logged_in_learner_id"]
-    assert at.text_input("login_name_input") is not None
+    assert at.text_input("login_username_input") is not None
+    assert not [b for b in at.button if str(b.key).startswith("btn_quick_login_") or b.key == "btn_login_direct"]
     assert _nav_ctrl(at) is None
 
-    # Tên rỗng bị cảnh báo, vẫn ở màn login.
-    at.button("btn_login_direct").click().run()
+    # Bỏ trống: cảnh báo, vẫn ở màn login.
+    at.button("btn_login_submit").click().run()
     assert not at.exception
-    assert any("họ và tên" in str(w.value) for w in at.warning)
+    assert any("tên đăng nhập" in str(w.value) for w in at.warning)
     assert not at.session_state["logged_in_learner_id"]
 
-    # Đăng nhập thành công -> màn nạp tài liệu (chưa có RAG).
-    at.text_input("login_name_input").set_value("Nguyễn Test").run()
-    at.button("btn_login_direct").click().run()
+    # Sai tài khoản -> báo lỗi.
+    at.text_input("login_username_input").set_value("khongco")
+    at.text_input("login_password_input").set_value("sai")
+    at.button("btn_login_submit").click().run()
+    assert not at.exception
+    assert len(at.error) >= 1
+    assert not at.session_state["logged_in_learner_id"]
+
+    # Đăng ký thành công -> màn nạp tài liệu (chưa có RAG).
+    _register(at, "nguyen_test", "matkhau123", "Nguyễn Test")
     assert not at.exception
     assert at.session_state["logged_in_learner_id"]
     assert at.session_state["has_document"] is False
     assert at.session_state["kb"] is None
     assert at.button("btn_load_sample_onboarding") is not None
     assert _nav_ctrl(at) is None
+
+    # Đăng xuất rồi đăng nhập lại bằng đúng mật khẩu; đăng ký trùng tên bị từ chối.
+    at.button("btn_logout").click().run()
+    assert not at.session_state["logged_in_learner_id"]
+    _register(at, "nguyen_test", "matkhau123", "Người khác")
+    assert not at.session_state["logged_in_learner_id"]
+    assert len(at.error) >= 1
+    at.text_input("login_username_input").set_value("nguyen_test")
+    at.text_input("login_password_input").set_value("matkhau123")
+    at.button("btn_login_submit").click().run()
+    assert not at.exception
+    assert at.session_state["logged_in_learner_id"]
 
 
 def test_logout_clears_document_state(tmp_path: Path, monkeypatch):
@@ -80,7 +108,7 @@ def test_logout_clears_document_state(tmp_path: Path, monkeypatch):
     assert not at.session_state["doc_id"]
     assert at.session_state["kb"] is None
     assert at.session_state["concept_map"] is None
-    assert at.text_input("login_name_input") is not None
+    assert at.text_input("login_username_input") is not None
 
 
 def test_nav_segmented_control_and_chat_to_quiz_button(tmp_path: Path, monkeypatch):

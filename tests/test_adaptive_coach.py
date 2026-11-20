@@ -309,3 +309,10 @@ def test_llm_retry_and_no_retry_on_auth(temp_db: Path, monkeypatch):
     with pytest.raises(llm.LLMError, match="API key không hợp lệ"):
         llm.complete_structured([{"role": "user", "content": "hi"}], Quiz, db_path=temp_db)
     assert auth_calls["n"] == 1
+
+
+def test_placement_question_count_scales_with_document_and_is_capped_at_30():
+    assert adaptive.placement_question_count(1, 0) == 3
+    assert adaptive.placement_question_count(7, 3000) == 7
+    assert adaptive.placement_question_count(12, 40000) == 17
+    assert adaptive.placement_question_count(60, 500000) == 30

@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import re
+import secrets
 import sqlite3
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -151,12 +154,34 @@ def init_db(db_path: str | Path | None = None) -> None:
                 turn_json TEXT DEFAULT '',
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS users (
+                username TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                learner_id TEXT NOT NULL,
+                password_hash TEXT NOT NULL,
+                salt TEXT NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
             """
         )
 
         existing = conn.execute("SELECT COUNT(*) AS cnt FROM learners").fetchone()["cnt"]
         if existing == 0:
             _seed_default_learners(conn)
+
+        # Dọn sạch các profile cũ từng tạo không qua tài khoản mật khẩu (bảng users).
+        legacy_rows = conn.execute(
+            """
+            SELECT learner_id FROM learners
+            WHERE learner_id NOT IN ('me', 'intern_demo', 'senior_demo')
+              AND learner_id NOT IN (SELECT learner_id FROM users)
+            """
+        ).fetchall()
+        for r in legacy_rows:
+            lid = r["learner_id"]
+            for tbl in ("chat_messages", "learner_documents", "confidence_stats", "quiz_attempts", "misconceptions", "concept_mastery", "learners"):
+                conn.execute(f"DELETE FROM {tbl} WHERE learner_id = ?", (lid,))
 
 
 def _seed_default_learners(conn: sqlite3.Connection) -> None:
@@ -362,6 +387,92 @@ def login_or_register_learner(
 def list_user_learners(db_path: str | Path | None = None) -> list[dict]:
     """Danh sách tài khoản người học do người dùng tự tạo (bỏ qua hồ sơ demo)."""
     return [row for row in list_learners(db_path) if row["learner_id"] not in DEMO_LEARNER_IDS]
+
+
+_USERNAME_RE = re.compile(r"^[a-z0-9_.-]{3,32}$")
+_PASSWORD_MIN_LENGTH = 6
+_PBKDF2_ITERATIONS = 200000
+
+
+def _hash_password(password: str, salt: bytes) -> str:
+    return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, _PBKDF2_ITERATIONS).hex()
+
+
+def register_user(
+    username: str,
+    password: str,
+    display_name: str = "",
+    db_path: str | Path | None = None,
+) -> str:
+    """Đăng ký tài khoản username/password, tạo hồ sơ người học và trả về learner_id."""
+    clean_username = (username or "").strip().lower()
+    if not _USERNAME_RE.match(clean_username):
+        raise ValueError("Tên đăng nhập 3-32 ký tự, chỉ gồm chữ cái không dấu, số, _ . -")
+    if not password or len(password) < _PASSWORD_MIN_LENGTH:
+        raise ValueError("Mật khẩu tối thiểu 6 ký tự.")
+
+    init_db(db_path)
+    now = _now_iso()
+
+    with _connect(db_path) as conn:
+        existing = conn.execute(
+            "SELECT 1 FROM users WHERE username = ?", (clean_username,)
+        ).fetchone()
+        if existing is not None:
+            raise ValueError("Tên đăng nhập đã tồn tại.")
+
+        learner_id = "user_" + uuid.uuid4().hex[:12]
+        learner_name = display_name.strip() or clean_username
+        conn.execute(
+            "INSERT INTO learners (learner_id, name, role_label, overall_level, updated_at) VALUES (?, ?, ?, ?, ?)",
+            (learner_id, learner_name, "Học viên", "Mới bắt đầu", now),
+        )
+
+        salt_bytes = secrets.token_bytes(16)
+        password_hash = _hash_password(password, salt_bytes)
+        conn.execute(
+            """
+            INSERT INTO users (username, display_name, learner_id, password_hash, salt)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (clean_username, learner_name, learner_id, password_hash, salt_bytes.hex()),
+        )
+        return learner_id
+
+
+def authenticate_user(
+    username: str,
+    password: str,
+    db_path: str | Path | None = None,
+) -> str | None:
+    """Xác thực username/password; trả về learner_id khi đúng, None khi sai."""
+    clean_username = (username or "").strip().lower()
+    init_db(db_path)
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT learner_id, password_hash, salt FROM users WHERE username = ?",
+            (clean_username,),
+        ).fetchone()
+
+    if row is None:
+        # Thực hiện một phép hash giả để thời gian phản hồi không tiết lộ username có tồn tại hay không.
+        _hash_password(password or "", b"\x00" * 16)
+        return None
+
+    computed = _hash_password(password or "", bytes.fromhex(row["salt"]))
+    if hmac.compare_digest(computed, row["password_hash"]):
+        return row["learner_id"]
+    return None
+
+
+def get_user_display_name(learner_id: str, db_path: str | Path | None = None) -> str:
+    """Trả về tên hiển thị của tài khoản theo learner_id, hoặc chuỗi rỗng nếu không có."""
+    init_db(db_path)
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT display_name FROM users WHERE learner_id = ?", (learner_id,)
+        ).fetchone()
+    return row["display_name"] if row is not None else ""
 
 
 def _is_due(next_review_due: str) -> bool:

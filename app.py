@@ -448,52 +448,69 @@ def _render_login_screen() -> None:
         st.markdown(
             '<div class="sc-login-card">'
             + render_brand_lockup_html("Gia sư AI cá nhân hóa theo năng lực của bạn")
-            + "<p>Nhập họ tên để bắt đầu. Trình độ ban đầu sẽ được đánh giá tự động qua bài kiểm tra đầu vào.</p></div>",
+            + "<p>Đăng nhập bằng tài khoản của bạn hoặc đăng ký mới. Trình độ ban đầu được đánh giá qua bài kiểm tra đầu vào.</p></div>",
             unsafe_allow_html=True,
         )
-        existing = db.list_user_learners()
-        if existing:
-            st.caption("Đăng nhập nhanh bằng tài khoản đã tạo:")
-            for item in existing:
-                if st.button(
-                    f"👤 {item['name']} ({item.get('overall_level', '')})",
-                    key=f"btn_quick_login_{item['learner_id']}",
-                    width="stretch",
-                ):
-                    _do_login(item["learner_id"], start_placement=False)
-                    st.rerun()
-        with st.container(border=True):
-            name = st.text_input("Họ và tên", key="login_name_input", placeholder="Ví dụ: Nguyễn Khoa Anh")
-            api_key = ""
-            if not config.has_live_api_key():
-                api_key = st.text_input(
-                    "AI Portal API Key",
-                    type="password",
-                    key="login_api_key_input",
-                    placeholder="Dán key AI Portal để chạy Live...",
+        tab_login, tab_register = st.tabs(["Đăng nhập", "Đăng ký"])
+        api_key = ""
+        with tab_login:
+            with st.container(border=True):
+                username = st.text_input("Tên đăng nhập", key="login_username_input")
+                password = st.text_input("Mật khẩu", type="password", key="login_password_input")
+                if not config.has_live_api_key():
+                    api_key = st.text_input(
+                        "AI Portal API Key",
+                        type="password",
+                        key="login_api_key_input",
+                        placeholder="Dán key AI Portal để chạy Live...",
+                    )
+                submitted_login = st.button(
+                    "Đăng nhập", key="btn_login_submit", type="primary", width="stretch"
                 )
-            b1, b2 = st.columns([1.3, 1.0])
-            submitted_test = b1.button(
-                "📝 Đánh giá đầu vào & Học",
-                key="btn_login_submit",
-                type="primary",
-                width="stretch",
-            )
-            submitted_direct = b2.button(
-                "💬 Vào thẳng Chat AI",
-                key="btn_login_direct",
-                width="stretch",
-            )
-        if submitted_test or submitted_direct:
-            if not (name or "").strip():
-                st.warning("Hãy nhập họ và tên để bắt đầu.")
+        with tab_register:
+            with st.container(border=True):
+                reg_username = st.text_input("Tên đăng nhập", key="reg_username_input")
+                reg_display = st.text_input(
+                    "Họ và tên hiển thị", key="reg_display_name_input", placeholder="Ví dụ: Nguyễn Khoa Anh"
+                )
+                reg_password = st.text_input("Mật khẩu", type="password", key="reg_password_input")
+                reg_password2 = st.text_input("Nhập lại mật khẩu", type="password", key="reg_password2_input")
+                submitted_register = st.button(
+                    "Tạo tài khoản & Đánh giá đầu vào", key="btn_register_submit", type="primary", width="stretch"
+                )
+
+        def _apply_api_key() -> None:
+            if (api_key or "").strip():
+                config.set_runtime_api_key(api_key.strip())
+                st.session_state["session_api_key"] = api_key.strip()
+
+        if submitted_login:
+            if not (username or "").strip() or not password:
+                st.warning("Hãy nhập tên đăng nhập và mật khẩu.")
             else:
-                if (api_key or "").strip():
-                    config.set_runtime_api_key(api_key.strip())
-                    st.session_state["session_api_key"] = api_key.strip()
-                lid = db.login_or_register_learner(name.strip(), "Mới bắt đầu")
-                _do_login(lid, start_placement=bool(submitted_test))
-                st.rerun()
+                lid = db.authenticate_user(username.strip(), password)
+                if not lid:
+                    st.error("Sai tên đăng nhập hoặc mật khẩu.")
+                else:
+                    _apply_api_key()
+                    _do_login(lid, start_placement=False)
+                    st.rerun()
+        elif submitted_register:
+            if not (reg_username or "").strip() or not reg_password:
+                st.warning("Hãy nhập tên đăng nhập và mật khẩu.")
+            elif reg_password != reg_password2:
+                st.error("Mật khẩu nhập lại không khớp.")
+            else:
+                try:
+                    lid = db.register_user(
+                        reg_username.strip(), reg_password, display_name=(reg_display or "").strip()
+                    )
+                except ValueError as exc:
+                    st.error(str(exc))
+                else:
+                    _apply_api_key()
+                    _do_login(lid, start_placement=True)
+                    st.rerun()
 
 
 def _render_header(dna: LearnerDNA) -> None:
@@ -559,7 +576,7 @@ def _render_tab_map(dna: LearnerDNA, coverage: dict) -> None:
             f"Tài liệu **{cmap.doc_title}** gồm **{len(cmap.concepts)} khái niệm cốt lõi** có liên kết tiên quyết. "
             f"Hiện đã làm chủ **{coverage['mastered']}/{coverage['total']}** mục."
         )
-    n_pl = min(max(len(cmap.concepts), 5), 10)
+    n_pl = adaptive.placement_question_count(len(cmap.concepts), len(st.session_state.doc_text or ""))
     with c_act:
         if st.button(
             f"Chẩn đoán trình độ đầu vào ({n_pl} câu)",
@@ -621,8 +638,15 @@ def _render_tab_map(dna: LearnerDNA, coverage: dict) -> None:
                     )
                     st.session_state.placement_result = res
                     st.rerun()
-                if st.button("Đóng bài chẩn đoán", key="btn_close_placement", width="stretch"):
+                if st.button(
+                    "Bỏ qua bài kiểm tra (tính 0%)",
+                    icon=":material/skip_next:",
+                    key="btn_close_placement",
+                    width="stretch",
+                    help="Không làm bài đầu vào: hồ sơ giữ ở mức 0% (Mới bắt đầu), bạn có thể làm lại bất cứ lúc nào.",
+                ):
                     st.session_state.placement_quiz = None
+                    st.toast("Đã bỏ qua bài kiểm tra đầu vào, hồ sơ giữ ở mức 0%.")
                     st.rerun()
             else:
                 res: QuizResult = st.session_state.placement_result

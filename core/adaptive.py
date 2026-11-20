@@ -62,6 +62,15 @@ def extract_concept_map(
     return demo_extract_concept_map(text=text, doc_id=doc_id, doc_title=doc_title, db_path=db_path)
 
 
+PLACEMENT_MAX_QUESTIONS = 30
+_PLACEMENT_BATCH = 10
+
+
+def placement_question_count(concept_count: int, text_len: int = 0) -> int:
+    """Số câu bài chẩn đoán đầu vào tùy tài liệu: mỗi khái niệm 1 câu, tài liệu dài thêm câu, tối đa 30."""
+    return max(3, min(PLACEMENT_MAX_QUESTIONS, concept_count + text_len // 8000))
+
+
 def generate_placement_test(
     text: str,
     concept_map: DocumentConceptMap,
@@ -69,9 +78,9 @@ def generate_placement_test(
     demo_mode: bool = False,
     db_path: str | Path | None = None,
 ) -> Quiz:
-    """Sinh bài chẩn đoán năng lực đầu vào 3 câu leo thang Bloom: Nhớ -> Hiểu -> Vận dụng."""
-    concept_names = [c.name for c in concept_map.concepts[:5]]
-    n_target = min(max(len(concept_names), 5), 10)
+    """Sinh bài chẩn đoán đầu vào phủ toàn bộ khái niệm của tài liệu (số câu tùy tài liệu, tối đa 30), leo thang Bloom."""
+    concept_names = [c.name for c in concept_map.concepts]
+    n_target = placement_question_count(len(concept_names), len(text))
     bloom_cycle = ("Nhớ", "Hiểu", "Vận dụng", "Phân tích")
     if demo_mode or not config.has_live_api_key():
         # Lấy đủ câu phủ tối đa các chủ đề của tài liệu và trải đều 4 cấp độ Bloom.
@@ -102,27 +111,40 @@ def generate_placement_test(
                 picked.append(cand)
         return Quiz(questions=picked[:n_target])
 
-    topic_lines = "\n".join(
-        f"- Câu {i + 1}: chủ đề '{concept_names[i % len(concept_names)]}' — mức Bloom '{bloom_cycle[i % len(bloom_cycle)]}'"
-        for i in range(n_target)
-    ) if concept_names else "\n".join(
-        f"- Câu {i + 1}: mức Bloom '{bloom_cycle[i % len(bloom_cycle)]}'"
-        for i in range(n_target)
-    )
-    user_prompt = (
-        f"Hãy tạo đúng {n_target} câu hỏi CHẨN ĐOÁN TRÌNH ĐỘ ĐẦU VÀO phủ đều toàn bộ các chủ đề chính của tài liệu:\n"
-        f"{topic_lines}\n"
-        f"Mỗi câu phải bám sát văn bản và ghi đúng tên chủ đề tương ứng.\n\nVĂN BẢN:\n{text[:config.MAX_INPUT_CHARS]}"
-    )
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": user_prompt},
-    ]
-    quiz = complete_structured(
-        messages, Quiz, model=model or config.DEFAULT_MODEL, temperature=0.2, purpose="placement_test", db_path=db_path
-    )
-    # Chỉ giữ câu hợp lệ (đủ 4 đáp án, chỉ số đúng trong 0..3), không chấm người học theo câu hỏng.
-    return Quiz(questions=[q for q in quiz.questions if _is_valid(q)][:n_target])
+    # Live: sinh theo lô tối đa 10 câu để tránh bị cắt khi tài liệu dài / nhiều khái niệm.
+    collected: list = []
+    seen_q: set[str] = set()
+    for start in range(0, n_target, _PLACEMENT_BATCH):
+        end = min(start + _PLACEMENT_BATCH, n_target)
+        topic_lines = "\n".join(
+            (
+                f"- Câu {i - start + 1}: chủ đề '{concept_names[i % len(concept_names)]}' — mức Bloom '{bloom_cycle[i % len(bloom_cycle)]}'"
+                if concept_names
+                else f"- Câu {i - start + 1}: mức Bloom '{bloom_cycle[i % len(bloom_cycle)]}'"
+            )
+            for i in range(start, end)
+        )
+        avoid = ""
+        if collected:
+            avoid = "\nKhông lặp lại các câu đã có:\n" + "\n".join(f"- {q.question}" for q in collected[-12:]) + "\n"
+        user_prompt = (
+            f"Hãy tạo đúng {end - start} câu hỏi CHẨN ĐOÁN TRÌNH ĐỘ ĐẦU VÀO bám sát tài liệu:\n"
+            f"{topic_lines}\n"
+            f"Mỗi câu phải bám sát văn bản và ghi đúng tên chủ đề tương ứng.{avoid}\n\nVĂN BẢN:\n{text[:config.MAX_INPUT_CHARS]}"
+        )
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ]
+        quiz = complete_structured(
+            messages, Quiz, model=model or config.DEFAULT_MODEL, temperature=0.2, purpose="placement_test", db_path=db_path
+        )
+        # Chỉ giữ câu hợp lệ (đủ 4 đáp án, chỉ số đúng trong 0..3), không chấm người học theo câu hỏng.
+        for q in quiz.questions:
+            if _is_valid(q) and q.question not in seen_q:
+                seen_q.add(q.question)
+                collected.append(q)
+    return Quiz(questions=collected[:n_target])
 
 
 def _match_concept_name(raw_topic: str, concepts_order: list[str] | None) -> str:
