@@ -731,14 +731,18 @@ def _inspect_state(state: CoachState, kb: DualMemoryKnowledgeBase) -> dict:
     )
 
     if conv_intent in _CONVERSATIONAL_INTENTS:
-        chunks: list[RetrievedChunk] = []
         in_scope = True
         topic = last_topic or (cmap.concepts[0].name if cmap.concepts else "Kiến thức chung")
+        if llm_router is not None:
+            q_ctx = llm_router.standalone_query.strip() or f"{topic}. {state.get('last_follow_up') or state['query']}"
+            chunks, _ = kb.retrieve(q_ctx, top_k=3)
+        else:
+            chunks = []
         traces.append(
             ToolCallTrace(
                 tool_name="inspect_conversation",
                 arguments={"intent": conv_intent, "last_topic": last_topic},
-                summary=f"Phản hồi ngắn của người học, giữ mạch chủ đề '{topic}' (không tra tài liệu)",
+                summary=f"Phản hồi ngắn của người học, giữ mạch chủ đề '{topic}'",
             )
         )
         merged_mistakes: list[RetrievedChunk] = []
@@ -758,7 +762,10 @@ def _inspect_state(state: CoachState, kb: DualMemoryKnowledgeBase) -> dict:
             if dna.active_misconceptions
             else (cmap.concepts[0].name if cmap.concepts else state["query"])
         )
-        chunks = []
+        if llm_router is not None and focus_name:
+            chunks, _ = kb.retrieve(focus_name, top_k=2)
+        else:
+            chunks = []
         in_scope = True
         traces.append(
             ToolCallTrace(
@@ -1357,9 +1364,13 @@ def _build_coach_graph(kb: DualMemoryKnowledgeBase, db_path: str | Path | None =
                 "- CHỈ KHI học viên tự nhận 'hiểu rồi' / 'biết rồi': mới nhắc nhẹ rằng nói hiểu rồi chưa đủ cộng điểm trình độ (có thể tự giải thích 1-2 câu tại đây hoặc bấm 'Luyện ngay Quiz'), rồi hỏi 1 câu kiểm tra ngắn.\n"
                 "- Tuyệt đối không trả lời máy móc kiểu văn mẫu, không lặp nguyên văn câu hỏi cũ, không bịa ngoài tài liệu."
             )
+            chunks_block = "\n\n".join(
+                f"{c.page} ({c.source}):\n{c.content[:400]}" for c in (state.get("retrieved_chunks") or [])[:3]
+            ) or "(trống)"
             user_prompt = (
                 f"Chủ đề hiện tại: {base.get('topic') or state['topic']}\n"
                 f"Mục lục các chủ đề trong tài liệu:\n{concepts_overview}\n"
+                f"Đoạn tài liệu nguồn liên quan (RAG):\n{chunks_block}\n\n"
                 f"Câu hỏi Gia sư vừa đặt: {state.get('last_follow_up') or 'Không có'}\n"
                 f"Ý định hội thoại: {state.get('conv_intent', '')}\n"
                 f"Hội thoại gần đây:\n{chr(10).join(history_lines) or '(trống)'}\n\n"
