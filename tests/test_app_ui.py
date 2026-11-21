@@ -182,7 +182,9 @@ def test_app_full_navigation_and_interactions(tmp_path: Path, monkeypatch):
 
     at.radio("practice_mode").set_value("Vấn đáp ngược Feynman (Teach-Back)").run()
     assert not at.exception
-    at.selectbox[-1].set_value("Chunking và Overlap").run()
+    # Chọn theo nhãn: selectbox Model nằm trong sidebar nên thứ tự vị trí không còn ổn định.
+    feynman_sel = [s for s in at.selectbox if s.label == "Khái niệm muốn kiểm tra bản chất"][0]
+    feynman_sel.set_value("Chunking và Overlap").run()
     at.button("btn_fill_feynman").click().run()
     at.button("btn_eval_feynman").click().run()
     assert not at.exception

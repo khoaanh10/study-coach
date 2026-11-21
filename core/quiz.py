@@ -18,9 +18,11 @@ from core.llm import LLMError, complete_structured
 from core.prompts import (
     DIFFICULTY_HINTS,
     GATE_PROMPT,
+    OPEN_GRADE_PROMPT,
     SYSTEM_PROMPT,
     VERIFY_PROMPT,
 )
+from core.rag import _STOP_WORDS_FOLDED, _is_technical_term, _strip_accents
 
 NO_CONTENT_MESSAGE = (
     "Văn bản này không có nội dung kiến thức rõ ràng để ra câu hỏi. "
@@ -148,7 +150,7 @@ def generate_quiz(
         if not quiz.questions:
             # Model cho rằng văn bản không có gì để hỏi; không gọi lại để ép ra câu hỏi.
             break
-        valid = [q for q in quiz.questions if _is_valid(q)]
+        valid = [_as_mcq(q) for q in quiz.questions if _is_valid(q)]
         if not valid:
             continue
         agreed = _verify(valid, text, model)
@@ -273,21 +275,220 @@ def _verify(questions: list[Question], text: str, model: str | None) -> list[boo
     return [c.supported for c in got]
 
 
+# ---------- Dạng câu hỏi mở: điền vào chỗ trống & tự luận ngắn ----------
+QUESTION_MODES = ["Trắc nghiệm", "Điền vào chỗ trống", "Tự luận ngắn", "Kết hợp cả ba dạng"]
+QTYPE_LABELS = {"mcq": "Trắc nghiệm", "fill_blank": "Điền vào chỗ trống", "short_answer": "Tự luận ngắn"}
+BLANK_MARK = "_____"
+_TOKEN_RE = re.compile(r"[0-9A-Za-zÀ-ỹ_]+(?:-[0-9A-Za-z_]+)*")
+
+
+def _as_mcq(q: Question) -> Question:
+    """Câu do model sinh luôn là trắc nghiệm: xóa các trường dạng mở model có thể tự điền."""
+    q.qtype, q.blank_prompt, q.answer_text = "mcq", "", ""
+    return q
+
+
+def _fold(text: str) -> str:
+    """Chuẩn hóa để so khớp câu trả lời tự gõ: bỏ dấu, chữ thường, chỉ giữ chữ/số."""
+    return " ".join(re.findall(r"[a-z0-9_]+", _strip_accents((text or "").lower())))
+
+
+def _pick_blank_term(evidence: str, prefer: str = "") -> str:
+    """Chọn (tất định) một thuật ngữ then chốt trong câu bằng chứng để đục lỗ.
+
+    Ưu tiên thuật ngữ kỹ thuật/số (chunk, overlap, top-k, 0.2...), kế đến từ dài nhất không phải từ nối;
+    trong cùng nhóm ưu tiên từ cũng xuất hiện trong đáp án đúng."""
+    prefer_fold = set(_fold(prefer).split())
+    best: tuple[tuple[int, int, int], str] | None = None
+    for pos, tok in enumerate(_TOKEN_RE.findall(evidence or "")):
+        low = tok.lower()
+        folded = _strip_accents(low)
+        if folded in _STOP_WORDS_FOLDED or len(tok) < 3:
+            continue
+        technical = _is_technical_term(low) or any(ch.isdigit() for ch in tok)
+        if not technical and len(tok) < 5:
+            continue
+        rank = (2 if technical else 1, 1 if folded in prefer_fold else 0, len(tok))
+        # Bằng hạng thì giữ từ xuất hiện trước (pos nhỏ hơn) để kết quả ổn định.
+        if best is None or rank > best[0]:
+            best = (rank, tok)
+    return best[1] if best else ""
+
+
+def to_fill_blank(q: Question) -> Question | None:
+    """Chuyển câu trắc nghiệm đã có bằng chứng thành câu điền vào chỗ trống; None nếu không đục lỗ được."""
+    evidence = (q.evidence or "").strip()
+    if len(evidence) < 25:
+        return None
+    term = _pick_blank_term(evidence, q.options[q.correct_index] if _is_valid(q) else "")
+    if not term:
+        return None
+    pattern = re.compile(rf"(?<![0-9A-Za-zÀ-ỹ_]){re.escape(term)}(?![0-9A-Za-zÀ-ỹ_])", re.IGNORECASE)
+    blanked = pattern.sub(BLANK_MARK, evidence)
+    if BLANK_MARK not in blanked:
+        return None
+    out = q.model_copy(deep=True)
+    out.qtype, out.blank_prompt, out.answer_text = "fill_blank", blanked, term
+    return out
+
+
+def to_short_answer(q: Question) -> Question:
+    out = q.model_copy(deep=True)
+    out.qtype, out.blank_prompt = "short_answer", ""
+    out.answer_text = q.options[q.correct_index] if _is_valid(q) else (q.evidence or "")
+    return out
+
+
+def apply_question_types(quiz: Quiz, mode: str = "Trắc nghiệm") -> Quiz:
+    """Đổi dạng câu hỏi của quiz theo lựa chọn trên giao diện.
+
+    Câu dạng mở được dựng (tất định) từ chính câu trắc nghiệm đã qua kiểm chứng bằng chứng, nên vẫn bám
+    tài liệu và dùng được cả khi không có API key. Câu không đục lỗ được thì chuyển thành tự luận ngắn."""
+    if mode not in QUESTION_MODES or mode == "Trắc nghiệm":
+        return quiz
+    out: list[Question] = []
+    for i, q in enumerate(quiz.questions):
+        if mode == "Kết hợp cả ba dạng":
+            want = ("mcq", "fill_blank", "short_answer")[i % 3]
+        else:
+            want = "fill_blank" if mode == "Điền vào chỗ trống" else "short_answer"
+        if want == "mcq":
+            out.append(q)
+        elif want == "fill_blank":
+            out.append(to_fill_blank(q) or to_short_answer(q))
+        else:
+            out.append(to_short_answer(q))
+    return Quiz(questions=out)
+
+
+def display_question(q: Question) -> str:
+    """Nội dung câu hỏi hiển thị cho người học theo đúng dạng câu."""
+    if q.qtype == "fill_blank" and q.blank_prompt:
+        return f"Điền từ/cụm từ còn thiếu vào chỗ trống: «{q.blank_prompt}»"
+    return q.question
+
+
+def _content_tokens(text: str) -> list[str]:
+    return [t for t in _fold(text).split() if len(t) >= 2 and t not in _STOP_WORDS_FOLDED]
+
+
+def grade_open_answer_offline(q: Question, learner_text: str) -> tuple[bool, str]:
+    """Chấm tất định (không gọi LLM) một câu trả lời tự gõ. Trả (đúng?, nhận xét)."""
+    answer = _fold(learner_text)
+    expected = _fold(q.answer_text)
+    if not answer:
+        return False, "Bỏ trống."
+    if q.qtype == "fill_blank":
+        # Đúng khi gõ đúng thuật ngữ (không phân biệt hoa/thường, dấu), cho phép kèm 1-2 từ đệm.
+        ok = bool(expected) and (
+            answer == expected
+            or (f" {expected} " in f" {answer} " and len(answer.split()) <= len(expected.split()) + 2)
+        )
+        return ok, ("Khớp đúng thuật ngữ trong tài liệu." if ok else f"Chưa khớp thuật ngữ cần điền: «{q.answer_text}».")
+    keys = list(dict.fromkeys(_content_tokens(q.answer_text)))
+    if not keys:
+        keys = list(dict.fromkeys(_content_tokens(q.evidence)))
+    got = set(_content_tokens(learner_text))
+    hit = [k for k in keys if k in got]
+    ratio = len(hit) / len(keys) if keys else 0.0
+    ok = ratio >= 0.5 and len(got) >= min(3, len(keys))
+    note = f"Nêu được {len(hit)}/{len(keys)} ý từ khóa của đáp án mẫu (chấm offline theo từ khóa)."
+    return ok, note
+
+
+class _OpenGrade(BaseModel):
+    reason: str  # lập luận ngắn, viết trước khi kết luận
+    is_correct: bool
+    misconception: str = ""
+
+
+class _OpenGrades(BaseModel):
+    grades: list[_OpenGrade]
+
+
+def grade_open_answers(
+    questions: list[Question],
+    learner_texts: list[str],
+    model: str | None = None,
+    demo_mode: bool = True,
+) -> list[tuple[bool, str, str]]:
+    """Chấm loạt câu trả lời tự gõ. Trả danh sách (đúng?, nhận xét, lỗi tư duy chẩn đoán).
+
+    Có API key và không ở demo_mode: một lời gọi LLM (structured output) chấm tất cả các câu.
+    demo_mode hoặc LLM lỗi: dùng bộ chấm tất định `grade_open_answer_offline`."""
+    offline = [(*grade_open_answer_offline(q, t), "") for q, t in zip(questions, learner_texts)]
+    todo = [i for i, t in enumerate(learner_texts) if (t or "").strip()]
+    if demo_mode or not config.has_live_api_key() or not todo:
+        return offline
+    listing = "\n\n".join(
+        f"Câu {n + 1} ({QTYPE_LABELS.get(questions[i].qtype, 'Tự luận ngắn')}): {display_question(questions[i])}\n"
+        f"Đáp án mẫu: {questions[i].answer_text}\n"
+        f"Bằng chứng: {questions[i].evidence}\n"
+        f"Câu trả lời của người học: {learner_texts[i].strip()[:600]}"
+        for n, i in enumerate(todo)
+    )
+    try:
+        got = complete_structured(
+            [
+                {"role": "system", "content": OPEN_GRADE_PROMPT},
+                {"role": "user", "content": listing},
+            ],
+            _OpenGrades,
+            model=model,
+            temperature=0,
+            purpose="open_answer_grading",
+        ).grades
+    except Exception:  # noqa: BLE001 - lỗi mạng/định dạng bất kỳ đều lùi về bộ chấm offline, không chặn nộp bài
+        return offline
+    if len(got) != len(todo):
+        return offline
+    out = list(offline)
+    for i, g in zip(todo, got):
+        out[i] = (bool(g.is_correct), g.reason.strip(), (g.misconception or "").strip())
+    return out
+
+
 def grade(
     quiz: Quiz,
     answers: list[int | None],
     confidences: list[str] | None = None,
+    text_answers: list[str | None] | None = None,
+    demo_mode: bool = True,
+    model: str | None = None,
 ) -> QuizResult:
-    """answers[i] là chỉ số đáp án đã chọn cho câu i, hoặc None nếu bỏ trống."""
+    """answers[i] là chỉ số đáp án đã chọn cho câu i, hoặc None nếu bỏ trống.
+
+    text_answers[i] là câu trả lời tự gõ cho câu dạng mở (fill_blank / short_answer). Câu dạng mở chỉ
+    gọi LLM khi demo_mode=False và có API key; mặc định chấm tất định để test/CI không chạm API."""
     items: list[GradedQuestion] = []
     weak_topics: list[str] = []
     detected_misc: list[str] = []
     blind_spots = 0
     lucky_guesses = 0
 
+    open_idx = [i for i, q in enumerate(quiz.questions) if q.qtype in ("fill_blank", "short_answer")]
+    open_texts = [
+        ((text_answers[i] if text_answers and i < len(text_answers) else "") or "").strip() for i in open_idx
+    ]
+    open_grades = dict(
+        zip(
+            open_idx,
+            grade_open_answers([quiz.questions[i] for i in open_idx], open_texts, model=model, demo_mode=demo_mode),
+        )
+    ) if open_idx else {}
+    open_text_by_idx = dict(zip(open_idx, open_texts))
+
     for i, q in enumerate(quiz.questions):
         chosen = answers[i] if i < len(answers) else None
         conf = (confidences[i] if confidences and i < len(confidences) else "Bình thường") or "Bình thường"
+        is_open = i in open_grades
+        learner_text = open_text_by_idx.get(i, "")
+        grader_note = ""
+        open_misc = ""
+        if is_open:
+            open_ok, grader_note, open_misc = open_grades[i]
+            # Câu dạng mở: đúng thì coi như chọn đáp án đúng; sai/bỏ trống thì không có lựa chọn nào.
+            chosen = q.correct_index if (open_ok and learner_text) else None
         is_ok = chosen == q.correct_index
         diagnosed = ""
 
@@ -300,7 +501,15 @@ def grade(
         else:
             if q.topic and q.topic not in weak_topics:
                 weak_topics.append(q.topic)
-            if chosen is None:
+            if is_open and learner_text:
+                cal_tag = "Điểm mù tự tin sai" if conf == "Chắc chắn" else "Biết mình chưa biết"
+                if conf == "Chắc chắn":
+                    blind_spots += 1
+                if open_misc and open_misc.lower() != "chính xác":
+                    diagnosed = open_misc
+                    if open_misc not in detected_misc:
+                        detected_misc.append(open_misc)
+            elif chosen is None:
                 diagnosed = "Bỏ trống — cần kiểm tra lại khái niệm này"
                 cal_tag = "Biết mình chưa biết"
             else:
@@ -318,7 +527,7 @@ def grade(
 
         items.append(
             GradedQuestion(
-                question=q.question,
+                question=display_question(q),
                 options=q.options,
                 chosen_index=chosen,
                 correct_index=q.correct_index,
@@ -331,6 +540,10 @@ def grade(
                 diagnosed_misconception=diagnosed,
                 confidence=conf,
                 calibration_tag=cal_tag,
+                qtype=q.qtype if is_open else "mcq",
+                learner_text=learner_text,
+                expected_text=q.answer_text if is_open else "",
+                grader_feedback=grader_note,
             )
         )
 

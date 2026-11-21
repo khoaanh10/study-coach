@@ -115,7 +115,7 @@ def run_holdout_eval(kb: DualMemoryKnowledgeBase) -> dict:
     }
 
 
-def run_offline_eval(embeddings=None, result_suffix: str = "") -> dict:
+def run_offline_eval(embeddings=None, result_suffix: str = "", save: bool = True, out_dir=None) -> dict:
     """Đo truy xuất. embeddings=None dùng embedding cục bộ (offline); truyền embedding OpenAI để đo cấu hình Live."""
     questions_path = ROOT / "eval" / "questions.json"
     items = json.loads(questions_path.read_text(encoding="utf-8"))
@@ -220,7 +220,10 @@ def run_offline_eval(embeddings=None, result_suffix: str = "") -> dict:
         "details": details,
     }
 
-    out_dir = ROOT / "eval" / "results"
+    if not save:
+        # Giao diện và test chỉ cần số liệu: không ghi đè file kết quả đang được git theo dõi.
+        return summary
+    out_dir = Path(out_dir) if out_dir else ROOT / "eval" / "results"
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / f"latest_eval{result_suffix}.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"

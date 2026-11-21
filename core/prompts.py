@@ -63,6 +63,17 @@ VERIFY_PROMPT = (
     "Trả về checks theo đúng thứ tự và đúng số lượng câu hỏi."
 )
 
+OPEN_GRADE_PROMPT = (
+    "Bạn là giám khảo chấm câu trả lời tự gõ của người học (dạng điền vào chỗ trống hoặc tự luận ngắn). "
+    "Với mỗi câu, bạn nhận: câu hỏi, đáp án mẫu, câu trích bằng chứng từ tài liệu và câu trả lời của người học. "
+    "Chỉ dựa vào đáp án mẫu và bằng chứng, không dùng kiến thức ngoài. "
+    "Chấp nhận từ đồng nghĩa, viết không dấu, khác hoa/thường và diễn đạt khác miễn đúng ý then chốt; "
+    "không chấp nhận câu trả lời chung chung, lạc đề hoặc trái với bằng chứng. "
+    "Với mỗi câu: viết 'reason' ngắn gọn bằng tiếng Việt trước, rồi mới kết luận 'is_correct'. "
+    "Nếu sai vì một hiểu nhầm cụ thể, ghi hiểu nhầm đó vào 'misconception' (một câu ngắn); nếu không thì để trống. "
+    "Trả đúng số phần tử và đúng thứ tự các câu được đưa vào."
+)
+
 CONCEPT_MAP_PROMPT = (
     "Bạn là chuyên gia thiết kế chương trình học. Đọc VĂN BẢN và rút trích 5 đến 8 khái niệm cốt lõi nhất "
     "theo trình tự logic để người học nắm chắc tài liệu. Với mỗi khái niệm: "

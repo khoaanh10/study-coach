@@ -19,7 +19,7 @@ from core.demo_provider import (
 )
 from core.llm import LLMError, complete_structured
 from core.prompts import CONCEPT_MAP_PROMPT, SYSTEM_PROMPT, TEACH_BACK_PROMPT
-from core.quiz import _is_valid
+from core.quiz import _as_mcq, _is_valid, generate_quiz
 from core.rag import _STOP_WORDS, DualMemoryKnowledgeBase
 
 _BLOOM_RANK = {"Nhớ": 1, "Hiểu": 2, "Vận dụng": 3, "Phân tích": 4}
@@ -143,7 +143,7 @@ def generate_placement_test(
         for q in quiz.questions:
             if _is_valid(q) and q.question not in seen_q:
                 seen_q.add(q.question)
-                collected.append(q)
+                collected.append(_as_mcq(q))
     return Quiz(questions=collected[:n_target])
 
 
@@ -238,7 +238,8 @@ def record_quiz_outcome(
             else:
                 solid_cnt += 1
         else:
-            if item.chosen_index is not None and item.confidence == "Chắc chắn":
+            answered = item.chosen_index is not None or bool((item.learner_text or "").strip())
+            if answered and item.confidence == "Chắc chắn":
                 blind_cnt += 1
             else:
                 aware_cnt += 1
@@ -276,6 +277,110 @@ def record_quiz_outcome(
         concepts_order=concepts_order,
         db_path=db_path,
     )
+
+
+REVIEW_MIN_QUESTIONS = 3
+REVIEW_MAX_QUESTIONS = 10
+
+
+def collect_review_targets(learner_dna: LearnerDNA, concept_map: DocumentConceptMap | None = None) -> list[dict]:
+    """Gom các mục cần ôn hôm nay: lỗi tư duy đang mở trước, rồi tới khái niệm đến hạn ôn (Spaced Repetition).
+
+    Mỗi phần tử: {"topic", "reason" ("misconception" | "due"), "detail", "mastery_score"}."""
+    names = [c.name for c in concept_map.concepts] if concept_map is not None else None
+    mastery = {c.concept: c for c in learner_dna.concepts}
+    targets: list[dict] = []
+    seen: set[str] = set()
+    for m in learner_dna.active_misconceptions:
+        topic = _match_concept_name(m.topic, names)
+        if topic.lower() in seen:
+            continue
+        seen.add(topic.lower())
+        cm = mastery.get(topic)
+        targets.append(
+            {
+                "topic": topic,
+                "reason": "misconception",
+                "detail": m.description,
+                "mastery_score": cm.mastery_score if cm else 0.0,
+            }
+        )
+    due = sorted((c for c in learner_dna.concepts if c.due_for_review), key=lambda c: c.mastery_score)
+    for c in due:
+        if c.concept.lower() in seen:
+            continue
+        seen.add(c.concept.lower())
+        targets.append(
+            {
+                "topic": c.concept,
+                "reason": "due",
+                "detail": "Đến hạn ôn lại theo lịch lặp lại ngắt quãng.",
+                "mastery_score": c.mastery_score,
+            }
+        )
+    return targets
+
+
+def build_review_session(
+    text: str,
+    learner_dna: LearnerDNA,
+    concept_map: DocumentConceptMap | None = None,
+    model: str | None = None,
+    demo_mode: bool = False,
+    max_questions: int = 8,
+) -> tuple[Quiz, list[dict]]:
+    """Dựng một phiên "Ôn hôm nay" 5–10 phút: quiz ngắn phủ các lỗi tư duy đang mở và khái niệm đến hạn.
+
+    Trả (quiz, danh sách mục được ôn). Không có mục nào cần ôn thì trả quiz rỗng."""
+    targets = collect_review_targets(learner_dna, concept_map)
+    if not targets:
+        return Quiz(questions=[]), []
+    cap = max(REVIEW_MIN_QUESTIONS, min(REVIEW_MAX_QUESTIONS, max_questions))
+    is_demo = demo_mode or not config.has_live_api_key()
+    picked: list = []
+    seen_q: set[str] = set()
+
+    def _take(questions: list, limit: int) -> None:
+        taken = 0
+        for q in questions:
+            if taken >= limit or len(picked) >= cap:
+                return
+            if q.question in seen_q:
+                continue
+            seen_q.add(q.question)
+            picked.append(q)
+            taken += 1
+
+    if is_demo:
+        # Offline: mỗi mục lấy 1–2 câu (lỗi tư duy được 2 câu), không tốn lời gọi nào.
+        for t in targets:
+            if len(picked) >= cap:
+                break
+            want = 2 if t["reason"] == "misconception" else 1
+            try:
+                pool = generate_quiz(
+                    text=text, n=want + 2, difficulty="Trung bình", demo_mode=True,
+                    focus_topic=t["topic"], learner_dna=learner_dna,
+                ).questions
+            except LLMError:
+                pool = []
+            # Chỉ giữ câu đúng chủ đề nếu ngân hàng câu hỏi có gắn chủ đề khớp.
+            on_topic = [q for q in pool if _match_concept_name(q.topic, [t["topic"]]) == t["topic"] and (
+                q.topic.lower() in t["topic"].lower() or t["topic"].lower() in q.topic.lower()
+            )]
+            _take(on_topic or pool, want)
+    else:
+        # Live: một lời gọi duy nhất cho cả phiên để giữ chi phí và thời gian chờ thấp.
+        topics = [t["topic"] for t in targets[:6]]
+        n = max(REVIEW_MIN_QUESTIONS, min(cap, len(topics) + sum(t["reason"] == "misconception" for t in targets[:6])))
+        quiz = generate_quiz(
+            text=text, n=n, difficulty="Trung bình", model=model, demo_mode=False,
+            focus_topic=", ".join(topics), learner_dna=learner_dna,
+        )
+        _take(quiz.questions, cap)
+    covered = {(_match_concept_name(q.topic, [t["topic"] for t in targets]) or "").lower() for q in picked}
+    used = [t for t in targets if t["topic"].lower() in covered] or targets[: max(1, len(picked))]
+    return Quiz(questions=picked[:cap]), used
 
 
 def evaluate_teach_back(

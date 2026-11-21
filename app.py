@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 from pathlib import Path
 
@@ -9,7 +10,7 @@ import streamlit as st
 from openai import OpenAIError
 
 import config
-from core import adaptive, breakthrough, db, vision
+from core import adaptive, breakthrough, db, export, vision
 from core.coach_graph import run_coach_turn, stream_coach_turn
 from core.contracts import (
     CoachTurnResult,
@@ -22,42 +23,76 @@ from core.contracts import (
 )
 from core.llm import LLMError
 from core.loader import (
+    SUPPORTED_EXTENSIONS,
     load_default_samples,
     load_sections_from_pasted_text,
     load_structured_sections,
 )
-from core.quiz import _looks_meaningless, generate_adaptive_quiz, grade
+from core.quiz import (
+    QTYPE_LABELS,
+    QUESTION_MODES,
+    _looks_meaningless,
+    apply_question_types,
+    display_question,
+    generate_adaptive_quiz,
+    grade,
+)
 from core.rag import DualMemoryKnowledgeBase, build_embeddings, compute_coverage_stats
 from core.ui_theme import (
-    clean_html,
     esc,
-    icon_svg,
     inject_theme_css,
+    render_auth_head_html,
     render_bento_strip_html,
+    render_chat_empty_html,
+    render_chat_header_html,
     render_citation_pills_html,
+    render_coach_context_html,
     render_concept_card_html,
     render_confidence_matrix_html,
+    render_doc_section_html,
+    render_doc_toc_html,
     render_git_diff_card_html,
     render_incident_ticket_html,
+    render_login_hero_html,
     render_mastery_chart_html,
     render_brand_lockup_html,
     render_misconception_card_html,
     render_next_step_callout_html,
+    render_page_head_html,
+    render_review_targets_html,
     render_route_banner_html,
+    render_sidebar_status_html,
+    render_socratic_question_html,
+    render_streak_html,
+    render_typing_html,
+    render_vision_step_html,
+    section_anchor,
 )
 
 # Mọi lỗi gọi LLM đều được bắt và hiện thông báo thân thiện thay vì traceback.
 _LLM_ERRORS = (LLMError, OpenAIError)
 
-st.set_page_config(page_title="Study Coach — Gia sư AI Thích ứng", layout="wide")
+st.set_page_config(page_title="Study Coach — Gia sư AI Thích ứng", layout="wide", initial_sidebar_state="expanded")
 st.markdown(inject_theme_css(), unsafe_allow_html=True)
 
 NAV_LABELS = {
+    "coach": ":material/forum: Gia sư AI",
+    "review": ":material/event_repeat: Ôn hôm nay",
     "map": ":material/account_tree: Bản đồ năng lực",
-    "coach": ":material/psychology: Gia sư Socratic & Vision",
-    "practice": ":material/quiz: Quiz thích ứng & Vấn đáp",
-    "lab": ":material/science: Phòng Lab Đột Phá",
+    "practice": ":material/quiz: Luyện tập",
+    "lab": ":material/science: Phòng Lab",
+    "doc": ":material/menu_book: Tài liệu",
     "analytics": ":material/analytics: Lộ trình & Số liệu",
+}
+
+# Tiêu đề + mô tả ngắn đầu mỗi trang (trang Gia sư dùng trọn chiều cao cho khung chat nên không có).
+PAGE_HEADS = {
+    "review": ("Ôn hôm nay", "Một phiên 5–10 phút gom các khái niệm đến hạn ôn và lỗi tư duy đang mở."),
+    "doc": ("Tài liệu", "Đọc toàn bộ tài liệu đang học. Trích dẫn của Gia sư dẫn tới đúng mục ở đây."),
+    "map": ("Bản đồ năng lực", "Mức thành thạo từng khái niệm trong tài liệu và bước nên học tiếp theo."),
+    "practice": ("Luyện tập", "Quiz thích ứng theo điểm yếu và vấn đáp ngược Feynman."),
+    "lab": ("Phòng Lab", "Soi mâu thuẫn ghi chú, xử lý sự cố giả lập và luyện phản biện."),
+    "analytics": ("Lộ trình & Số liệu", "Lộ trình ôn tập ưu tiên, sổ tay lỗi tư duy và số liệu kỹ thuật."),
 }
 
 
@@ -97,6 +132,7 @@ def _bootstrap_state() -> None:
         "learner_id": "",
         "selected_model": config.DEFAULT_MODEL,
         "chat_histories": {},
+        "active_convs": {},
         "pending_coach": None,
         "ab_comparison": None,
         "quiz": None,
@@ -108,6 +144,18 @@ def _bootstrap_state() -> None:
         "quiz_diff_select": "Tự động theo năng lực",
         "quiz_difficulty_used": "Tự động",
         "quiz_focus_used": "Tự động",
+        "quiz_type_select": QUESTION_MODES[0],
+        "quiz_answers": {},
+        "quiz_pos": 0,
+        "review_quiz": None,
+        "review_result": None,
+        "review_targets": [],
+        "review_version": 0,
+        "review_answers": {},
+        "review_pos": 0,
+        "doc_focus_page": "",
+        "doc_focus_snips": [],
+        "doc_search": "",
         "trojan_version": 0,
         "submission_results": {},
         "diff_note_sig": None,
@@ -165,21 +213,18 @@ def _reset_learner_session_results() -> None:
     for k in (
         "quiz", "quiz_result", "placement_quiz", "placement_result", "teach_back_eval",
         "vision_critique", "diff_report", "incident_eval", "trojan_result", "adv_eval",
-        "pending_coach", "coach_failed",
+        "pending_coach", "coach_failed", "review_quiz", "review_result",
     ):
         st.session_state[k] = None
+    st.session_state.review_targets = []
+    st.session_state.doc_focus_page = ""
+    st.session_state.doc_focus_snips = []
     st.session_state.quiz_recorded = False
     st.session_state.incident_tools_used = []
     st.session_state.teach_back_draft = ""
     st.session_state.adv_defense_input = ""
     st.session_state.trojan_version = st.session_state.get("trojan_version", 0) + 1
     st.session_state.submission_results = {}
-
-
-def _on_runtime_key_change() -> None:
-    key = (st.session_state.get("runtime_key_input") or "").strip()
-    st.session_state["session_api_key"] = key
-    config.set_runtime_api_key(key or None)
 
 
 def _is_demo_mode() -> bool:
@@ -212,8 +257,12 @@ def _jump_to_coach_topic(topic: str) -> None:
 
 
 def _jump_to_coach_remediation(item: GradedQuestion) -> None:
-    chosen_txt = item.options[item.chosen_index] if item.chosen_index is not None else "Bỏ trống"
-    correct_txt = item.options[item.correct_index]
+    if item.qtype != "mcq":
+        chosen_txt = (item.learner_text or "").strip() or "Bỏ trống"
+        correct_txt = item.expected_text or item.options[item.correct_index]
+    else:
+        chosen_txt = item.options[item.chosen_index] if item.chosen_index is not None else "Bỏ trống"
+        correct_txt = item.options[item.correct_index]
     _set_nav("coach")
     st.session_state.pending_coach = {
         "query": f"Tại sao câu '{item.question}' lại chọn '{correct_txt}' chứ không phải '{chosen_txt}'?",
@@ -305,6 +354,7 @@ def _apply_new_document(text: str, sections: list[dict], title: str, doc_id: str
     st.session_state.concept_map = cmap
     # Hội thoại cũ thuộc tài liệu cũ: giữ lại sẽ khiến Gia sư bám chủ đề không còn trong tài liệu mới.
     st.session_state.chat_histories = {}
+    st.session_state.active_convs = {}
     _reset_learner_session_results()
     _reset_doc_scoped_inputs(cmap)
     st.session_state.quiz = None
@@ -351,6 +401,7 @@ def _restore_saved_document(learner_id: str, doc_id: str) -> bool:
     st.session_state.concept_map = saved["concept_map"]
     st.session_state.has_document = True
     st.session_state.chat_histories = {}
+    st.session_state.active_convs = {}
     _reset_learner_session_results()
     _reset_doc_scoped_inputs(saved["concept_map"])
     kb.sync_learner_mistakes(db.get_learner_dna(learner_id, doc_id))
@@ -360,26 +411,24 @@ def _restore_saved_document(learner_id: str, doc_id: str) -> bool:
 LEVEL_OPTIONS = ["Mới bắt đầu", "Trung cấp", "Nâng cao"]
 
 
-@st.cache_resource(show_spinner=False)
 def _session_signing_key() -> bytes:
-    return hashlib.sha256(f"study-coach-session::{config.DB_PATH}".encode("utf-8")).digest()
+    """Khóa ký cookie phiên: bí mật ngẫu nhiên từ SESSION_SECRET (hoặc file sinh tự động), không suy ra được từ cấu hình."""
+    return config.get_session_secret()
+
+
+def _session_signature(learner_id: str) -> str:
+    return hmac.new(_session_signing_key(), learner_id.encode("utf-8"), hashlib.sha256).hexdigest()[:32]
 
 
 def _make_session_token(learner_id: str) -> str:
-    import hmac
-
-    sig = hmac.new(_session_signing_key(), learner_id.encode("utf-8"), hashlib.sha256).hexdigest()[:16]
-    return f"{learner_id}.{sig}"
+    return f"{learner_id}.{_session_signature(learner_id)}"
 
 
 def _verify_session_token(token: str) -> str:
-    import hmac
-
     if not token or "." not in token:
         return ""
     lid, sig = token.rsplit(".", 1)
-    expected = hmac.new(_session_signing_key(), lid.encode("utf-8"), hashlib.sha256).hexdigest()[:16]
-    if not hmac.compare_digest(sig, expected):
+    if not hmac.compare_digest(sig, _session_signature(lid)):
         return ""
     if not db.get_user_display_name(lid):
         return ""
@@ -401,6 +450,7 @@ def _logout() -> None:
     st.session_state.has_document = False
     st.session_state.pending_placement_after_doc = False
     st.session_state.chat_histories = {}
+    st.session_state.active_convs = {}
     try:
         st.query_params.pop("session", None)
     except Exception:
@@ -481,31 +531,21 @@ def _load_sample_document() -> None:
     st.session_state.kb = kb
     st.session_state.concept_map = cmap
     st.session_state.chat_histories = {}
+    st.session_state.active_convs = {}
 
 
 def _render_login_screen() -> None:
     """Màn hình đăng nhập tự do: người học tự nhập tên, trình độ ban đầu đánh giá qua bài test đầu vào."""
-    _, mid, _ = st.columns([1.2, 2.2, 1.2])
-    with mid:
-        st.markdown(
-            '<div class="sc-login-card">'
-            + render_brand_lockup_html("Gia sư AI cá nhân hóa theo năng lực của bạn")
-            + "<p>Đăng nhập bằng tài khoản của bạn hoặc đăng ký mới. Trình độ ban đầu được đánh giá qua bài kiểm tra đầu vào.</p></div>",
-            unsafe_allow_html=True,
-        )
+    _, c_hero, mid, _ = st.columns([0.5, 5.2, 4.3, 0.5], gap="large")
+    with c_hero:
+        st.markdown(render_login_hero_html(), unsafe_allow_html=True)
+    with mid.container(key="sc_auth"):
+        st.markdown(render_auth_head_html(), unsafe_allow_html=True)
         tab_login, tab_register = st.tabs(["Đăng nhập", "Đăng ký"])
-        api_key = ""
         with tab_login:
             with st.form("form_login", border=True):
                 username = st.text_input("Tên đăng nhập", key="login_username_input")
                 password = st.text_input("Mật khẩu", type="password", key="login_password_input")
-                if not config.has_live_api_key():
-                    api_key = st.text_input(
-                        "AI Portal API Key",
-                        type="password",
-                        key="login_api_key_input",
-                        placeholder="Dán key AI Portal để chạy Live...",
-                    )
                 submitted_login = st.form_submit_button(
                     "Đăng nhập", key="btn_login_submit", type="primary", width="stretch"
                 )
@@ -521,11 +561,6 @@ def _render_login_screen() -> None:
                     "Tạo tài khoản & Đánh giá đầu vào", key="btn_register_submit", type="primary", width="stretch"
                 )
 
-        def _apply_api_key() -> None:
-            if (api_key or "").strip():
-                config.set_runtime_api_key(api_key.strip())
-                st.session_state["session_api_key"] = api_key.strip()
-
         if submitted_login:
             if not (username or "").strip() or not password:
                 st.warning("Hãy nhập tên đăng nhập và mật khẩu.")
@@ -533,7 +568,6 @@ def _render_login_screen() -> None:
                 with st.spinner("🔐 Đang xác thực tài khoản và tải không gian học tập..."):
                     lid = db.authenticate_user(username.strip(), password)
                     if lid:
-                        _apply_api_key()
                         _do_login(lid, start_placement=False)
                 if not lid:
                     st.error("Sai tên đăng nhập hoặc mật khẩu.")
@@ -550,16 +584,11 @@ def _render_login_screen() -> None:
                         lid = db.register_user(
                             reg_username.strip(), reg_password, display_name=(reg_display or "").strip()
                         )
-                        _apply_api_key()
                         _do_login(lid, start_placement=True)
                 except ValueError as exc:
                     st.error(str(exc))
                 else:
                     st.rerun()
-
-
-def _toggle_dashboard_strip() -> None:
-    st.session_state.show_dashboard_strip = not st.session_state.get("show_dashboard_strip", True)
 
 
 def _toggle_chat_focus() -> None:
@@ -571,75 +600,161 @@ def _reset_current_profile_cb() -> None:
     _reset_learner_session_results()
 
 
-def _render_header(dna: LearnerDNA) -> None:
-    """Header 1 hàng: brand · tài khoản · báo cáo học tập · cài đặt."""
-    c_brand, c_acc, c_rep, c_cfg = st.columns([5.8, 2.3, 2.1, 1.4], vertical_alignment="center")
-    with c_brand:
-        st.markdown(
-            render_brand_lockup_html("Gia sư AI hiểu năng lực của từng người học"),
-            unsafe_allow_html=True,
-        )
-    with c_acc:
-        with st.popover(f"👤 {dna.name}", width="stretch"):
-            st.markdown(f"**{dna.name}**")
-            st.caption(f"Trình độ hiện tại: {dna.overall_level}")
-            st.button(
-                "🚪 Đăng xuất",
-                key="btn_logout",
-                on_click=_logout,
+def _render_sidebar(dna: LearnerDNA, coverage: dict | None = None, with_nav: bool = True) -> str | None:
+    """Thanh dọc bên trái: thương hiệu · điều hướng · tài liệu đang học · tài khoản · cài đặt.
+
+    Trả về mục điều hướng người dùng vừa chọn (None nếu không vẽ điều hướng)."""
+    picked_nav: str | None = None
+    with st.sidebar:
+        st.markdown(render_brand_lockup_html("Gia sư AI theo năng lực của bạn"), unsafe_allow_html=True)
+        if with_nav:
+            cur_nav = st.session_state.get("active_nav") or "coach"
+            if cur_nav not in NAV_LABELS:
+                cur_nav = "coach"
+            nav_ver = st.session_state.get("_nav_ver", 0)
+            picked_nav = st.container(key="sc_nav").segmented_control(
+                "Điều hướng",
+                options=list(NAV_LABELS.keys()),
+                default=cur_nav,
+                format_func=lambda k: NAV_LABELS[k],
+                selection_mode="single",
+                key=f"nav_ctrl_{nav_ver}",
+                label_visibility="collapsed",
                 width="stretch",
+            ) or cur_nav
+            st.markdown(
+                render_sidebar_status_html(
+                    st.session_state.get("doc_title") or "Tài liệu",
+                    dna.overall_level,
+                    float((coverage or {}).get("coverage_pct", 0) or 0),
+                    streak_days=db.get_study_streak(dna.learner_id)["current"],
+                ),
+                unsafe_allow_html=True,
             )
-            if st.button(
-                "Làm mới tiến độ",
-                icon=":material/restart_alt:",
-                key="btn_reset_one",
-                on_click=_reset_current_profile_cb,
-                width="stretch",
-            ):
-                st.toast("Đã đặt lại tiến độ của tài khoản hiện tại.")
-    with c_rep:
-        dash_open = st.session_state.get("show_dashboard_strip", True)
-        st.button(
-            "✖ Đóng hồ sơ" if dash_open else "📊 Hồ sơ & Cài đặt",
-            key="btn_toggle_dashboard",
-            on_click=_toggle_dashboard_strip,
-            width="stretch",
-        )
-    with c_cfg:
-        with st.popover("⚙️ Cài đặt", width="stretch"):
-            st.markdown("**AI Portal Live**")
-            st.text_input(
-                "API Key",
-                type="password",
-                placeholder="Dán key AI Portal tại đây...",
-                key="runtime_key_input",
-                on_change=_on_runtime_key_change,
-            )
-            st.text_input(
-                "Base URL",
-                value=config.get_effective_base_url(),
-                key="runtime_base_url_input",
-                on_change=lambda: config.set_runtime_base_url(st.session_state.get("runtime_base_url_input")),
-            )
-            st.selectbox("Model", options=config.MODEL_CHOICES, key="selected_model")
-            st.caption(
-                f"Trạng thái: {'● Live AI Portal' if config.has_live_api_key() else '○ Chưa có API key'} · "
-                f"Ngân sách phiên: ${db.get_session_cost_usd():.4f} / ${config.MAX_SESSION_COST_USD:.2f}"
-            )
-            st.divider()
-            st.markdown("**Quản lý tài liệu**")
-            _render_doc_manager()
+            _render_sidebar_doc_switcher()
+        with st.container(key="sc_side_footer"):
+            with st.popover(dna.name, icon=":material/account_circle:", width="stretch"):
+                st.markdown(f"**{dna.name}**")
+                st.caption(f"Trình độ hiện tại: {dna.overall_level}")
+                st.button(
+                    "Đăng xuất",
+                    icon=":material/logout:",
+                    key="btn_logout",
+                    on_click=_logout,
+                    width="stretch",
+                )
+                if st.button(
+                    "Làm mới tiến độ",
+                    icon=":material/restart_alt:",
+                    key="btn_reset_one",
+                    on_click=_reset_current_profile_cb,
+                    width="stretch",
+                ):
+                    st.toast("Đã đặt lại tiến độ của tài khoản hiện tại.")
+            with st.popover("Tài liệu & Cài đặt", icon=":material/settings:", width="stretch"):
+                st.markdown("**AI Portal**")
+                # Base URL và API key chỉ đọc từ môi trường (.env): là cấu hình toàn tiến trình, không cho đổi từ UI.
+                st.selectbox("Model", options=config.MODEL_CHOICES, key="selected_model")
+                st.caption(
+                    f"Trạng thái: {'● Live AI Portal' if config.has_live_api_key() else '○ Chưa có API key'} · "
+                    f"Ngân sách phiên: ${db.get_session_cost_usd():.4f} / ${config.MAX_SESSION_COST_USD:.2f}"
+                )
+                st.divider()
+                st.markdown("**Quản lý tài liệu**")
+                _render_doc_manager()
+    return picked_nav
 
 
-def _render_tab_map(dna: LearnerDNA, coverage: dict) -> None:
+SAMPLE_DOC_LABEL = "Giáo trình mẫu: RAG & OpenAI API"
+
+
+def _render_sidebar_doc_switcher() -> None:
+    """Ô chọn tài liệu ngay trên thanh bên: đổi qua lại giữa các tài liệu đã lưu (và giáo trình mẫu)."""
+    lid = st.session_state.learner_id
+    cur_id = st.session_state.doc_id
+    options: dict[str, str] = {cur_id: st.session_state.get("doc_title") or "Tài liệu"}
+    for d in db.list_learner_documents(lid):
+        options.setdefault(d["doc_id"], d["title"])
+    options.setdefault(db.DEFAULT_DOC_ID, SAMPLE_DOC_LABEL)
+    ids = list(options)
+    # Key gắn với tài liệu hiện tại: khi tài liệu đổi bằng đường khác (upload, dán), ô chọn tự về đúng giá trị.
+    picked = st.container(key="sc_side_doc").selectbox(
+        "Đổi tài liệu",
+        options=ids,
+        index=0,
+        format_func=lambda k: options.get(k, k),
+        key=f"side_doc_pick_{cur_id}",
+        help="Chuyển nhanh sang tài liệu khác đã lưu. Tiến độ của từng tài liệu được giữ riêng.",
+    )
+    if picked and picked != cur_id:
+        _switch_document(picked)
+
+
+def _switch_document(doc_id: str) -> None:
+    """Mở một tài liệu đã lưu (hoặc giáo trình mẫu) rồi chạy lại trang, giữ nguyên trang đang xem."""
+    lid = st.session_state.learner_id
+    try:
+        if doc_id == db.DEFAULT_DOC_ID and db.load_learner_document(lid, doc_id) is None:
+            _load_sample_document()
+            _reset_learner_session_results()
+            _reset_doc_scoped_inputs(st.session_state.concept_map)
+            ok = True
+        else:
+            ok = _restore_saved_document(lid, doc_id)
+    except _LLM_ERRORS as e:
+        st.sidebar.error(str(e))
+        return
+    if not ok:
+        st.sidebar.error("Không mở lại được tài liệu này.")
+        return
+    st.session_state.has_document = True
+    st.session_state.quiz = None
+    st.session_state.quiz_result = None
+    st.session_state.placement_quiz = None
+    st.session_state.placement_result = None
+    st.toast(f"Đã chuyển sang tài liệu '{st.session_state.doc_title}'.")
+    st.rerun()
+
+
+def _review_counts(dna: LearnerDNA) -> tuple[int, int]:
+    """(số khái niệm đến hạn ôn, số lỗi tư duy đang mở)."""
+    return sum(1 for c in dna.concepts if c.due_for_review), len(dna.active_misconceptions)
+
+
+def _go_review() -> None:
+    _set_nav("review")
+
+
+def _render_tab_map(dna: LearnerDNA, coverage: dict, activity: dict | None = None) -> None:
     cmap: DocumentConceptMap = st.session_state.concept_map
     mastery_by_name = {c.concept: c for c in dna.concepts}
     plan = adaptive.build_study_plan(dna, cmap)
 
+    st.markdown(render_bento_strip_html(dna, coverage, activity or {}), unsafe_allow_html=True)
+
+    due_n, misc_n = _review_counts(dna)
+    if due_n or misc_n:
+        with st.container(border=True, key="card_review_cta"):
+            rc1, rc2 = st.columns([8.5, 3.5], vertical_alignment="center")
+            with rc1:
+                st.markdown(
+                    f"**Ôn hôm nay:** {due_n} khái niệm đến hạn ôn · {misc_n} lỗi tư duy đang mở. "
+                    "Một phiên ngắn 5–10 phút sẽ gom tất cả vào một bài."
+                )
+            with rc2:
+                st.button(
+                    "Bắt đầu ôn hôm nay",
+                    icon=":material/event_repeat:",
+                    type="primary",
+                    key="btn_map_review",
+                    on_click=_go_review,
+                    width="stretch",
+                )
+
     # Banner & Chẩn đoán đầu vào 60s
     c_intro, c_act = st.columns([7.5, 4.5], vertical_alignment="center")
     with c_intro:
-        st.markdown('<p class="sc-section-eyebrow">Bản đồ nhiệt kiến thức cá nhân hóa</p>', unsafe_allow_html=True)
+        st.markdown('<p class="sc-section-eyebrow">Bản đồ kiến thức cá nhân hóa</p>', unsafe_allow_html=True)
         st.write(
             f"Tài liệu **{cmap.doc_title}** gồm **{len(cmap.concepts)} khái niệm cốt lõi** có liên kết tiên quyết. "
             f"Hiện đã làm chủ **{coverage['mastered']}/{coverage['total']}** mục."
@@ -671,7 +786,7 @@ def _render_tab_map(dna: LearnerDNA, coverage: dict) -> None:
     # Placement test panel
     p_quiz: Quiz | None = st.session_state.get("placement_quiz")
     if p_quiz and p_quiz.questions:
-        with st.container(border=True):
+        with st.container(border=True, key="card_placement"):
             st.markdown("#### Bài Chẩn đoán Năng lực Đầu vào (Thang Bloom: Nhớ → Hiểu → Vận dụng)")
             if st.session_state.get("placement_result") is None:
                 with st.form("placement_quiz_form", border=False):
@@ -731,10 +846,11 @@ def _render_tab_map(dna: LearnerDNA, coverage: dict) -> None:
                     st.rerun()
 
     # Grid Bản đồ nhiệt
-    cols = st.columns(2, gap="medium")
+    st.markdown('<p class="sc-section-eyebrow">Các khái niệm trong tài liệu</p>', unsafe_allow_html=True)
+    cols = st.columns(3, gap="medium")
     for idx, node in enumerate(cmap.concepts):
         m = mastery_by_name.get(node.name) or ConceptMastery(concept=node.name)
-        with cols[idx % 2]:
+        with cols[idx % 3].container(border=True, key=f"card_concept_{idx}"):
             st.markdown(render_concept_card_html(node, m), unsafe_allow_html=True)
             if m.attempts > 0:
                 _sc = m.mastery_score
@@ -747,8 +863,8 @@ def _render_tab_map(dna: LearnerDNA, coverage: dict) -> None:
             b1, b2 = st.columns(2)
             with b1:
                 st.button(
-                    "Học với Gia sư",
-                    icon=":material/psychology:",
+                    "Hỏi Gia sư",
+                    icon=":material/forum:",
                     key=f"map_coach_{idx}",
                     on_click=_jump_to_coach_topic,
                     args=(node.name,),
@@ -756,7 +872,7 @@ def _render_tab_map(dna: LearnerDNA, coverage: dict) -> None:
                 )
             with b2:
                 st.button(
-                    "Luyện Quiz mục này",
+                    "Luyện Quiz",
                     icon=":material/quiz:",
                     key=f"map_quiz_{idx}",
                     on_click=_jump_to_quiz_topic,
@@ -767,17 +883,25 @@ def _render_tab_map(dna: LearnerDNA, coverage: dict) -> None:
 
 def _render_document_onboarding(dna: LearnerDNA) -> None:
     """Màn nạp tài liệu đầu tiên: hiển thị khi chưa có tài liệu nào."""
-    _render_header(dna)
-    _, mid, _ = st.columns([0.9, 3.0, 0.9])
+    _render_sidebar(dna, with_nav=False)
+    _, mid, _ = st.columns([0.6, 3.0, 0.6])
     with mid:
-        st.markdown("### 📚 Nạp tài liệu học tập của bạn")
-        st.caption(
-            "Tải lên hoặc dán tài liệu bạn muốn học. Gia sư sẽ dựng bản đồ năng lực, "
-            "bài kiểm tra và hội thoại bám sát chính tài liệu đó."
+        st.markdown(
+            render_page_head_html(
+                "Nạp tài liệu học tập của bạn",
+                "Tải lên hoặc dán tài liệu bạn muốn học. Gia sư sẽ dựng bản đồ năng lực, "
+                "bài kiểm tra và hội thoại bám sát chính tài liệu đó.",
+            ),
+            unsafe_allow_html=True,
         )
-        _render_doc_manager(onboarding=True)
-        st.divider()
-        if st.button("✨ Dùng thử giáo trình mẫu (RAG Cơ bản)", key="btn_load_sample_onboarding", width="stretch"):
+        with st.container(border=True, key="card_onboarding"):
+            _render_doc_manager(onboarding=True)
+        if st.button(
+            "Dùng thử giáo trình mẫu (RAG Cơ bản)",
+            icon=":material/auto_stories:",
+            key="btn_load_sample_onboarding",
+            width="stretch",
+        ):
             with st.status("✨ Đang chuẩn bị giáo trình mẫu...", expanded=True) as status:
                 st.write("📖 Đọc nội dung giáo trình & lập bản đồ tri thức...")
                 _load_sample_document()
@@ -790,11 +914,12 @@ def _render_doc_manager(onboarding: bool = False) -> None:
     sfx = "_onb" if onboarding else ""
     saved_docs = db.list_learner_documents(st.session_state.learner_id) if st.session_state.get("learner_id") else []
     if saved_docs:
-        st.markdown("**📚 Tài liệu đã lưu của bạn**")
+        st.markdown("**Tài liệu đã lưu của bạn**")
         for sd in saved_docs:
             is_current = st.session_state.get("has_document") and st.session_state.get("doc_id") == sd["doc_id"]
             if st.button(
-                f"{'✅ ' if is_current else '📄 '}{sd['title']}",
+                sd["title"],
+                icon=":material/check_circle:" if is_current else ":material/description:",
                 key=f"btn_open_saved_{sd['doc_id']}{sfx}",
                 width="stretch",
                 disabled=bool(is_current),
@@ -804,11 +929,13 @@ def _render_doc_manager(onboarding: bool = False) -> None:
                 else:
                     st.error("Không mở lại được tài liệu này.")
     with st.container():
-        t_file, t_paste = st.tabs(["📤 Tải tệp (PDF / TXT / MD)", "📋 Dán nội dung"])
+        t_file, t_paste = st.tabs(
+            [":material/upload_file: Tải tệp (PDF / Word / PowerPoint / TXT / MD)", ":material/content_paste: Dán nội dung"]
+        )
         with t_file:
             uploaded = st.file_uploader(
                 "Chọn một hoặc nhiều file tài liệu học tập",
-                type=["pdf", "txt", "md"],
+                type=list(SUPPORTED_EXTENSIONS),
                 accept_multiple_files=True,
                 key="doc_uploader" + sfx,
             )
@@ -816,7 +943,7 @@ def _render_doc_manager(onboarding: bool = False) -> None:
                 st.caption(f"Đã chọn {len(uploaded)} file. Giới hạn xử lý quiz {config.MAX_INPUT_CHARS:,} ký tự; toàn bộ nội dung được index tự động.")
             if st.button("Nạp file & Dựng Bản đồ Năng lực", icon=":material/auto_awesome:", type="primary", key="btn_load_files" + sfx, width="stretch"):
                 if not uploaded:
-                    st.warning("Hãy chọn ít nhất 1 file PDF, TXT hoặc MD trước.")
+                    st.warning("Hãy chọn ít nhất 1 file PDF, DOCX, PPTX, TXT hoặc MD trước.")
                 else:
                     try:
                         with st.status("✨ Đang phân tích tài liệu của bạn...", expanded=True) as status:
@@ -883,11 +1010,204 @@ def _chat_key(dna: LearnerDNA) -> str:
 
 
 def _get_chat_history(dna: LearnerDNA) -> list:
+    """Lịch sử của cuộc trò chuyện đang mở (mặc định: cuộc trò chuyện dùng gần nhất trên tài liệu này)."""
     histories: dict = st.session_state.chat_histories
     key = _chat_key(dna)
     if key not in histories:
-        histories[key] = db.load_chat_history(dna.learner_id, st.session_state.doc_id)
+        convs: dict = st.session_state.setdefault("active_convs", {})
+        conv_id = convs.get(key)
+        if conv_id is None:
+            existing = db.list_conversations(dna.learner_id, st.session_state.doc_id)
+            conv_id = existing[0]["id"] if existing else None
+            convs[key] = conv_id
+        histories[key] = (
+            db.load_chat_history(dna.learner_id, st.session_state.doc_id, conversation_id=conv_id) if conv_id else []
+        )
     return histories[key]
+
+
+def _persist_turn(dna: LearnerDNA, history: list, query: str, turn: CoachTurnResult) -> None:
+    """Ghi một cặp hỏi–đáp vào cuộc trò chuyện đang mở (tạo mới nếu chưa có) và vào lịch sử trong phiên."""
+    key = _chat_key(dna)
+    convs: dict = st.session_state.setdefault("active_convs", {})
+    conv_id = convs.get(key)
+    if conv_id is None:
+        conv_id = db.create_conversation(dna.learner_id, st.session_state.doc_id)
+        convs[key] = conv_id
+    doc_id = st.session_state.doc_id
+    uid = db.append_chat_message(dna.learner_id, doc_id, "user", query, conversation_id=conv_id)
+    aid = db.append_chat_message(dna.learner_id, doc_id, "assistant", turn.answer, turn=turn, conversation_id=conv_id)
+    history.append({"id": uid, "role": "user", "content": query})
+    history.append({"id": aid, "role": "assistant", "content": turn.answer, "turn": turn, "feedback": 0})
+
+
+def _new_conversation(dna: LearnerDNA) -> None:
+    """Bắt đầu cuộc trò chuyện mới; lịch sử cũ vẫn được giữ trong danh sách Hội thoại."""
+    key = _chat_key(dna)
+    convs: dict = st.session_state.setdefault("active_convs", {})
+    if st.session_state.chat_histories.get(key):
+        # Cuộc trò chuyện đang mở còn trống thì dùng tiếp, không tạo thêm bản ghi rỗng.
+        convs[key] = db.create_conversation(dna.learner_id, st.session_state.doc_id)
+    st.session_state.chat_histories[key] = []
+    st.session_state.pending_coach = None
+    st.session_state.coach_failed = None
+
+
+def _open_conversation(dna: LearnerDNA, conv_id: int) -> None:
+    key = _chat_key(dna)
+    st.session_state.setdefault("active_convs", {})[key] = conv_id
+    st.session_state.chat_histories[key] = db.load_chat_history(
+        dna.learner_id, st.session_state.doc_id, conversation_id=conv_id
+    )
+    st.session_state.pending_coach = None
+    st.session_state.coach_failed = None
+
+
+def _rename_conversation_cb(dna: LearnerDNA, conv_id: int) -> None:
+    db.rename_conversation(dna.learner_id, conv_id, st.session_state.get(f"conv_title_{conv_id}", ""))
+
+
+def _delete_conversation_cb(dna: LearnerDNA, conv_id: int) -> None:
+    key = _chat_key(dna)
+    db.delete_conversation(dna.learner_id, conv_id)
+    convs: dict = st.session_state.setdefault("active_convs", {})
+    if convs.get(key) == conv_id:
+        remaining = db.list_conversations(dna.learner_id, st.session_state.doc_id)
+        if remaining:
+            _open_conversation(dna, remaining[0]["id"])
+        else:
+            convs[key] = None
+            st.session_state.chat_histories[key] = []
+
+
+def _on_feedback(learner_id: str, msg: dict) -> None:
+    """Lưu đánh giá 👍/👎 của một câu trả lời (st.feedback: 1 = thích, 0 = không thích, None = bỏ chọn)."""
+    raw = st.session_state.get(f"fb_{msg.get('id')}")
+    value = 1 if raw == 1 else (-1 if raw == 0 else 0)
+    if db.set_message_feedback(learner_id, int(msg["id"]), value):
+        msg["feedback"] = value
+
+
+def _regenerate_last(dna: LearnerDNA) -> None:
+    """Bỏ cặp hỏi–đáp cuối rồi hỏi lại đúng câu đó để Gia sư trả lời lại."""
+    history = _get_chat_history(dna)
+    if len(history) < 2 or history[-1]["role"] != "assistant" or history[-2]["role"] != "user":
+        return
+    last_user, last_bot = history[-2], history[-1]
+    db.delete_chat_messages(dna.learner_id, [last_bot.get("id"), last_user.get("id")])
+    del history[-2:]
+    st.session_state.pending_coach = {
+        "query": last_user["content"],
+        "focus_topic": None,
+        "remediation_context": None,
+    }
+
+
+def _simplify_last(dna: LearnerDNA) -> None:
+    """Xin Gia sư giải thích lại nội dung vừa trả lời theo cách dễ hiểu hơn (thêm một lượt mới)."""
+    history = _get_chat_history(dna)
+    turn = history[-1].get("turn") if history and history[-1]["role"] == "assistant" else None
+    topic = (turn.topic or turn.suggested_quiz_topic) if turn else ""
+    if topic:
+        query = f"Giải thích lại '{topic}' theo cách đơn giản hơn, dùng một ví dụ đời thường dễ hình dung."
+    else:
+        query = "Giải thích lại câu trả lời vừa rồi theo cách đơn giản hơn, dùng một ví dụ đời thường dễ hình dung."
+    st.session_state.pending_coach = {"query": query, "focus_topic": topic or None, "remediation_context": None}
+
+
+def _sections_for_citation(cite: str, sections: list[dict], snippets: list[str] | None = None) -> list[int]:
+    """Chỉ số các mục tài liệu ứng với một nhãn trích dẫn ([Mục 2], [Trang 5]...).
+
+    Nhiều file có thể trùng nhãn trang: mục nào chứa đúng đoạn Gia sư đã dùng được đưa lên trước."""
+    label = (cite or "").strip()
+    if not label:
+        return []
+    hits = [i for i, s in enumerate(sections) if str(s.get("page", "")).strip() == label]
+    if not hits:
+        hits = [i for i, s in enumerate(sections) if s.get("page") and str(s["page"]) in label]
+    if snippets and len(hits) > 1:
+        from core.ui_theme import find_highlight_ranges
+
+        hits.sort(key=lambda i: 0 if find_highlight_ranges(str(sections[i].get("text", "")), snippets) else 1)
+    return hits
+
+
+def _open_doc_at(cite: str, snippets: list[str]) -> None:
+    st.session_state.doc_focus_page = cite
+    st.session_state.doc_focus_snips = list(snippets)
+    st.session_state.doc_search = ""
+    _set_nav("doc")
+
+
+@st.dialog("Nguồn trích dẫn", width="large")
+def _show_citation_dialog(cite: str, snippets: list[str]) -> None:
+    """Mở đoạn tài liệu gốc ứng với một trích dẫn, tô vàng phần Gia sư đã dùng."""
+    sections = st.session_state.get("doc_sections") or []
+    hits = _sections_for_citation(cite, sections, snippets)
+    if not hits:
+        st.info(f"Không tìm thấy {cite} trong tài liệu đang mở (có thể tài liệu đã được đổi).")
+        for snip in snippets[:2]:
+            st.markdown(f"> {snip}")
+        return
+    st.caption("Phần tô vàng là đoạn Gia sư đã dùng để trả lời.")
+    for i in hits[:3]:
+        st.markdown(
+            render_doc_section_html(sections[i], i, snippets, focused=True, with_anchor=False),
+            unsafe_allow_html=True,
+        )
+    if st.button("Mở trong trang Tài liệu", icon=":material/menu_book:", key="btn_cite_open_doc", type="primary"):
+        _open_doc_at(cite, snippets)
+        st.rerun()
+
+
+def _render_citation_buttons(turn: CoachTurnResult, idx: int) -> None:
+    """Chip trích dẫn bấm được: mở đoạn nguồn tương ứng trong hộp thoại."""
+    with st.container(horizontal=True, key=f"sc_cites_{idx}"):
+        for j, cite in enumerate(turn.citations):
+            label = str(cite).replace("[", "\\[").replace("]", "\\]")
+            if st.button(
+                label,
+                icon=":material/format_quote:",
+                key=f"cite_{idx}_{j}",
+                help="Mở đoạn nguồn được trích dẫn",
+            ):
+                _show_citation_dialog(cite, [c.content for c in turn.retrieved_chunks if c.page == cite])
+
+
+def _render_message_actions(dna: LearnerDNA, msg: dict, idx: int, is_last: bool) -> None:
+    """Hàng thao tác dưới câu trả lời: đánh giá 👍/👎; riêng câu mới nhất có Trả lời lại / Giải thích đơn giản hơn."""
+    mid = msg.get("id")
+    if not mid:
+        return
+    stored = int(msg.get("feedback") or 0)
+    turn: CoachTurnResult | None = msg.get("turn")
+    with st.container(horizontal=True, vertical_alignment="center", key=f"sc_msg_actions_{idx}"):
+        st.feedback(
+            "thumbs",
+            key=f"fb_{mid}",
+            default=(1 if stored > 0 else 0) if stored else None,
+            on_change=_on_feedback,
+            args=(dna.learner_id, msg),
+        )
+        if is_last:
+            # Lượt chấm câu trả lời Socratic đã cập nhật hồ sơ: không cho sinh lại để tránh ghi điểm hai lần.
+            if not (turn and turn.route_taken == "socratic_eval"):
+                st.button(
+                    "Trả lời lại",
+                    icon=":material/refresh:",
+                    key="btn_regen",
+                    type="tertiary",
+                    on_click=_regenerate_last,
+                    args=(dna,),
+                )
+            st.button(
+                "Giải thích đơn giản hơn",
+                icon=":material/lightbulb:",
+                key="btn_simpler",
+                type="tertiary",
+                on_click=_simplify_last,
+                args=(dna,),
+            )
 
 
 def _execute_coach_query(
@@ -911,10 +1231,7 @@ def _execute_coach_query(
         demo_mode=_is_demo_mode(),
         chat_history=list(history),
     )
-    history.append({"role": "user", "content": query})
-    history.append({"role": "assistant", "content": turn.answer, "turn": turn})
-    db.append_chat_message(dna.learner_id, st.session_state.doc_id, "user", query)
-    db.append_chat_message(dna.learner_id, st.session_state.doc_id, "assistant", turn.answer, turn=turn)
+    _persist_turn(dna, history, query, turn)
 
 
 def _fill_diff_note(note_key: str) -> None:
@@ -951,7 +1268,7 @@ def _render_tab_lab(dna: LearnerDNA) -> None:
         st.markdown('<p class="sc-section-eyebrow">Git Diff cho Não bộ · Soi mâu thuẫn giữa Ghi chú cá nhân &amp; Giáo trình gốc</p>', unsafe_allow_html=True)
         c_in, c_out = st.columns([5.5, 6.5], gap="large")
         with c_in:
-            with st.container(border=True):
+            with st.container(border=True, key="card_diff_in"):
                 st.caption("Khác với NotebookLM gộp chung mọi file, tính năng này tách bạch Ground Truth (Giáo trình) và My Notes (Ghi chép cá nhân) để phát hiện chỗ hiểu ngược và điểm mù.")
                 if st.session_state.doc_id == db.DEFAULT_DOC_ID:
                     sn1, sn2 = st.columns(2)
@@ -1026,7 +1343,7 @@ def _render_tab_lab(dna: LearnerDNA) -> None:
 
         with c_out:
             rep = st.session_state.get("diff_report")
-            with st.container(border=True):
+            with st.container(border=True, key="card_diff_out"):
                 st.markdown("#### Kết quả Đối chiếu (Cognitive Diff)")
                 if not rep:
                     st.info("Bấm nút bên trái để chạy đối chiếu ghi chú cá nhân với giáo trình gốc.")
@@ -1051,6 +1368,16 @@ def _render_tab_lab(dna: LearnerDNA) -> None:
                     if rep.patched_note:
                         with st.expander("Bản ghi chú đã hiệu đính sẵn sàng ôn thi", icon=":material/auto_awesome:", expanded=False):
                             st.code(rep.patched_note, language="markdown")
+                        st.download_button(
+                            "Tải ghi chú đã hiệu đính (.md)",
+                            data=export.diff_note_markdown(rep, st.session_state.doc_title),
+                            file_name=export.safe_filename(st.session_state.doc_title, "ghi-chu-hieu-dinh.md"),
+                            mime="text/markdown",
+                            icon=":material/download:",
+                            key="btn_dl_diff_note",
+                            on_click="ignore",
+                            width="stretch",
+                        )
 
     elif lab_mode == "incident":
         st.markdown('<p class="sc-section-eyebrow">Ca Trực Cứu Hỏa Production · Biến tài liệu lý thuyết thành Ticket sự cố điều phối qua LangGraph</p>', unsafe_allow_html=True)
@@ -1120,7 +1447,7 @@ def _render_tab_lab(dna: LearnerDNA) -> None:
 
         col_fix, col_res = st.columns([6.5, 5.5], gap="large")
         with col_fix:
-            with st.container(border=True):
+            with st.container(border=True, key="card_incident_fix"):
                 st.markdown("#### Chẩn đoán Nguyên nhân gốc & Phương án vá")
                 pick_idx = st.radio(
                     "Chọn nguyên nhân gốc gây ra sự cố",
@@ -1168,7 +1495,7 @@ def _render_tab_lab(dna: LearnerDNA) -> None:
 
         with col_res:
             ev = st.session_state.get("incident_eval")
-            with st.container(border=True):
+            with st.container(border=True, key="card_incident_eval"):
                 st.markdown("#### Đánh giá Post-Mortem")
                 if not ev:
                     st.info("Chạy tối đa 3 công cụ điều tra bên trên để nhận +15 điểm thưởng quy trình, sau đó chọn nguyên nhân gốc.")
@@ -1188,10 +1515,10 @@ def _render_tab_lab(dna: LearnerDNA) -> None:
         st.markdown('<p class="sc-section-eyebrow">Rèn phản xạ chống tin mù quáng AI &amp; Luyện bảo vệ Đồ án trước Hội đồng</p>', unsafe_allow_html=True)
         col_tr, col_adv = st.columns([6, 6], gap="large")
         with col_tr:
-            with st.container(border=True):
+            with st.container(border=True, key="card_trojan"):
                 _render_trojan_panel(dna, cmap, concept_names)
         with col_adv:
-            with st.container(border=True):
+            with st.container(border=True, key="card_adv"):
                 _render_adv_panel(dna)
 
 
@@ -1354,7 +1681,6 @@ def _render_adv_panel(dna: LearnerDNA) -> None:
 
 
 def _render_tab_coach(dna: LearnerDNA) -> None:
-    histories: dict = st.session_state.chat_histories
     history: list[dict] = _get_chat_history(dna)
     pending = st.session_state.pop("pending_coach", None)
 
@@ -1370,85 +1696,110 @@ def _render_tab_coach(dna: LearnerDNA) -> None:
     cmap_ctx = st.session_state.get("concept_map")
     topics_preview = ", ".join(c.name for c in cmap_ctx.concepts[:2]) if cmap_ctx and cmap_ctx.concepts else "chưa có chủ đề"
     focus_mode = bool(st.session_state.get("chat_focus_mode", False))
-    chat_height = 760 if focus_mode else 560
     weak_topic = (
         dna.active_misconceptions[0].topic
         if dna.active_misconceptions
         else (dna.concepts[0].concept if dna.concepts else "Chunking và Overlap")
     )
 
-    with st.expander(
-        f"💡 Bối cảnh học tập hiện tại: {doc_title} · {topics_preview} · Trình độ: {dna.overall_level} ({len(dna.active_misconceptions)} lỗi đang mở)",
-        expanded=False,
-    ):
-        st.markdown(f"**{dna.name}** · Trình độ `{dna.overall_level}`")
-        if dna.active_misconceptions:
-            for m in dna.active_misconceptions[:2]:
-                st.markdown(
-                    render_misconception_card_html(m.topic, m.description, m.occurrences, False),
-                    unsafe_allow_html=True,
-                )
-        else:
-            st.caption("Chưa ghi nhận lỗi tư duy đang mở — Gia sư sẽ tự đẩy độ sâu lên mức Vận dụng / Phân tích.")
-
     if _is_demo_mode():
-        st.warning("Chưa có AI Portal API key — hãy nhập key trong ⚙️ Cài đặt để Gia sư trả lời bằng AI Portal Live.")
+        st.warning(
+            "Chưa cấu hình AI Portal API key (OPENAI_API_KEY trong file .env) — Gia sư đang trả lời ở chế độ demo.",
+            icon=":material/key:",
+        )
 
-    with st.container(border=True):
-        ch_head, ch_focus, ch_reset = st.columns([7.4, 1.8, 2.2], vertical_alignment="center")
+    # Ẩn cột bối cảnh: khung chat chiếm trọn chiều ngang.
+    if focus_mode:
+        col_chat, col_side = st.container(), None
+    else:
+        col_chat, col_side = st.columns([8.4, 3.6], gap="medium")
+
+    with col_chat.container(border=True, key="card_chat"):
+        ch_head, ch_conv, ch_focus, ch_reset = st.columns([3.6, 2.4, 2.5, 2.7], vertical_alignment="center")
         with ch_head:
-            status_html = (
-                '<span style="display:inline-flex;align-items:center;gap:4px;background:#e6f6ec;color:#15803d;border:1px solid #bbf7d0;padding:1px 8px;border-radius:999px;font-size:0.74rem;font-weight:700;">● Trực tuyến</span>'
-                if not _is_demo_mode()
-                else '<span style="display:inline-flex;align-items:center;gap:4px;background:#fef3c7;color:#b45309;border:1px solid #fde68a;padding:1px 8px;border-radius:999px;font-size:0.74rem;font-weight:700;">● Chưa kết nối</span>'
-            )
-            st.markdown(
-                clean_html(
-                    f"""
-                    <div class="sc-chat-card-header" style="display:flex;align-items:center;justify-content:flex-start;gap:0.75rem;background:transparent;padding:0.15rem 0.2rem;box-shadow:none;margin:0;">
-                      <div class="sc-chat-avatar-badge" style="width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,#14532d 0%,#166534 100%);color:#ffffff;display:inline-flex;align-items:center;justify-content:center;font-size:1.2rem;box-shadow:0 3px 8px rgba(20,83,45,0.22);flex-shrink:0;">🤖</div>
-                      <div>
-                        <div style="display:flex;align-items:center;gap:0.5rem;font-weight:800;font-size:1.02rem;color:#0f2e1d;">
-                          <span>Study Coach AI</span> {status_html}
-                        </div>
-                        <div style="font-size:0.77rem;color:#4b6e58;margin-top:1px;">Gia sư Socratic thích ứng theo tài liệu của bạn</div>
-                      </div>
-                    </div>
-                    """
-                ),
-                unsafe_allow_html=True,
-            )
+            st.markdown(render_chat_header_html(not _is_demo_mode()), unsafe_allow_html=True)
+        with ch_conv:
+            active_conv = st.session_state.get("active_convs", {}).get(_chat_key(dna))
+            convs = [
+                c
+                for c in db.list_conversations(dna.learner_id, st.session_state.doc_id)
+                if c["message_count"] > 0 or c["id"] == active_conv
+            ]
+            with st.popover("Hội thoại", icon=":material/forum:", width="stretch"):
+                st.caption(f"{len(convs)} cuộc trò chuyện trên tài liệu này")
+                st.button(
+                    "Cuộc trò chuyện mới",
+                    icon=":material/add:",
+                    key="btn_new_conv",
+                    on_click=_new_conversation,
+                    args=(dna,),
+                    width="stretch",
+                )
+                for c in convs:
+                    is_active = c["id"] == active_conv
+                    cv_open, cv_del = st.columns([8.2, 1.8], vertical_alignment="center")
+                    cv_open.button(
+                        (c["title"] or "Cuộc trò chuyện mới").replace("[", "\\[").replace("]", "\\]"),
+                        icon=":material/check_circle:" if is_active else ":material/chat_bubble:",
+                        key=f"conv_open_{c['id']}",
+                        on_click=_open_conversation,
+                        args=(dna, c["id"]),
+                        disabled=is_active,
+                        help=f"{c['message_count']} tin nhắn · cập nhật {c['updated_at'][:16]}",
+                        width="stretch",
+                    )
+                    cv_del.button(
+                        "",
+                        icon=":material/delete:",
+                        key=f"conv_del_{c['id']}",
+                        on_click=_delete_conversation_cb,
+                        args=(dna, c["id"]),
+                        help="Xóa cuộc trò chuyện này",
+                        type="tertiary",
+                    )
+                if active_conv:
+                    cur_title = next((c["title"] for c in convs if c["id"] == active_conv), "")
+                    st.divider()
+                    st.text_input(
+                        "Đổi tên cuộc trò chuyện đang mở",
+                        value=cur_title,
+                        key=f"conv_title_{active_conv}",
+                        max_chars=80,
+                    )
+                    st.button(
+                        "Lưu tên",
+                        icon=":material/edit:",
+                        key="btn_rename_conv",
+                        on_click=_rename_conversation_cb,
+                        args=(dna, active_conv),
+                        width="stretch",
+                    )
         with ch_focus:
             st.button(
-                "🗕 Thu nhỏ" if focus_mode else "⛶ Phóng to",
+                "Hiện bối cảnh" if focus_mode else "Ẩn bối cảnh",
+                icon=":material/right_panel_open:" if focus_mode else ":material/right_panel_close:",
                 key="btn_chat_focus",
                 on_click=_toggle_chat_focus,
                 width="stretch",
             )
         with ch_reset:
-            def _clear_chat_cb() -> None:
-                histories[_chat_key(dna)] = []
-                db.clear_chat_history(dna.learner_id, st.session_state.doc_id)
-
             if st.button(
-                "🔄 Làm mới chat",
+                "Làm mới chat",
+                icon=":material/restart_alt:",
                 key="btn_clear_chat",
-                on_click=_clear_chat_cb,
+                on_click=_new_conversation,
+                args=(dna,),
+                help="Mở cuộc trò chuyện mới. Lịch sử cũ vẫn được giữ trong mục Hội thoại.",
                 width="stretch",
             ):
-                st.toast("Đã bắt đầu lại cuộc trò chuyện.")
+                st.toast("Đã mở cuộc trò chuyện mới. Lịch sử cũ vẫn nằm trong mục Hội thoại.")
 
-        st.markdown(
-            '<hr style="margin:0.4rem 0 0.55rem 0;border:none;border-top:1.5px solid #e2efe7;">',
-            unsafe_allow_html=True,
-        )
-        chat_box = st.container(height=chat_height, border=False)
+        st.markdown('<hr class="sc-divider">', unsafe_allow_html=True)
+        # Chiều cao thật do CSS quyết định (.st-key-sc_chat_scroll: lấp đầy màn hình); 520 là giá trị dự phòng.
+        chat_box = st.container(height=520, border=False, key="sc_chat_scroll")
         with chat_box:
             if not history:
-                st.info(
-                    f"Gia sư đã nạp hồ sơ **{dna.name}** (trình độ **{dna.overall_level}**). "
-                    "Hãy chọn một gợi ý bên dưới hoặc đặt câu hỏi về tài liệu ở thanh nhập liệu."
-                )
+                st.markdown(render_chat_empty_html(dna.name, dna.overall_level), unsafe_allow_html=True)
             for idx, msg in enumerate(history):
                 if msg["role"] == "user":
                     with st.chat_message("user"):
@@ -1460,16 +1811,10 @@ def _render_tab_coach(dna: LearnerDNA) -> None:
                             st.markdown(render_route_banner_html(turn), unsafe_allow_html=True)
                             st.markdown(turn.answer)
                             if turn.citations:
-                                st.markdown(render_citation_pills_html(turn.citations), unsafe_allow_html=True)
+                                _render_citation_buttons(turn, idx)
                             if turn.follow_up_question:
                                 st.markdown(
-                                    clean_html(
-                                        f"""
-                                        <div style="background:#eef8f2;border-left:3.5px solid #16a34a;padding:0.65rem 0.9rem;border-radius:0 8px 8px 0;margin:0.65rem 0 0.85rem 0;font-size:0.86rem;color:#133822;">
-                                          <b>💡 Câu hỏi Socratic dành cho bạn:</b> {esc(turn.follow_up_question)}
-                                        </div>
-                                        """
-                                    ),
+                                    render_socratic_question_html(turn.follow_up_question),
                                     unsafe_allow_html=True,
                                 )
                             if turn.suggested_quiz_topic:
@@ -1483,21 +1828,12 @@ def _render_tab_coach(dna: LearnerDNA) -> None:
                                 )
                             if turn.tool_traces or turn.retrieved_chunks:
                                 with st.expander(
-                                    "🔍 Chi tiết suy luận & Nguồn tài liệu đối chiếu",
+                                    "Chi tiết suy luận & Nguồn tài liệu đối chiếu",
                                     icon=":material/manage_search:",
                                     expanded=False,
                                 ):
                                     if turn.tool_traces:
-                                        st.markdown(
-                                            clean_html(
-                                                f"""
-                                                <div class="sc-trace-box">
-                                                  <b>Lý do chọn nhánh:</b> {esc(turn.pedagogical_reason)}
-                                                </div>
-                                                """
-                                            ),
-                                            unsafe_allow_html=True,
-                                        )
+                                        st.markdown(f"**Lý do chọn nhánh:** {turn.pedagogical_reason}")
                                         for tr in turn.tool_traces:
                                             st.markdown(f"- `{tr.tool_name}` — {tr.summary}")
                                     if turn.retrieved_chunks:
@@ -1507,36 +1843,52 @@ def _render_tab_coach(dna: LearnerDNA) -> None:
                                             st.markdown(f"**{ch.page}** · `{ch.source}` (độ khớp `{ch.score:.2f}`)\n\n> {ch.content}")
                         else:
                             st.markdown(msg["content"])
+                        _render_message_actions(dna, msg, idx, is_last=idx == len(history) - 1)
 
         is_sample_doc = st.session_state.doc_id == db.DEFAULT_DOC_ID
         _cmap = st.session_state.concept_map
         first_topic = _cmap.concepts[0].name if (_cmap and _cmap.concepts) else "khái niệm chính"
         short_first = first_topic if len(first_topic) <= 24 else first_topic[:22] + "…"
         prompt_clicked: str | None = None
-        st.markdown(
-            '<hr style="margin:0.35rem 0 0.45rem 0;border:none;border-top:1px solid #e2efe7;">',
-            unsafe_allow_html=True,
-        )
-        st.markdown('<div class="sc-quick-label">⚡ Gợi ý hỏi nhanh:</div>', unsafe_allow_html=True)
-        qb1, qb2, qb3 = st.columns(3)
+        qb1, qb2, qb3 = st.container(key="sc_quick").columns(3)
         with qb1:
-            btn1_label = "📖 Giải thích: Chunking" if is_sample_doc else f"📖 Giải thích: {short_first}"
+            btn1_label = "Giải thích: Chunking" if is_sample_doc else f"Giải thích: {short_first}"
             btn1_prompt = (
                 "Giải thích Chunking và Overlap trong RAG là gì?"
                 if is_sample_doc
                 else f"Hãy giảng cho tôi chủ đề '{first_topic}' theo đúng trình độ hiện tại của tôi."
             )
-            if st.button(btn1_label, key="qp_chunk", help=f"Hỏi về {first_topic}", width="stretch"):
+            if st.button(btn1_label, icon=":material/menu_book:", key="qp_chunk", help=f"Hỏi về {first_topic}", width="stretch"):
                 prompt_clicked = btn1_prompt
         with qb2:
-            if st.button("🎯 Gỡ lỗi phần yếu nhất", key="qp_weak", help=f"Xoáy vào chủ đề yếu: {weak_topic}", width="stretch"):
+            if st.button("Gỡ lỗi phần yếu nhất", icon=":material/target:", key="qp_weak", help=f"Xoáy vào chủ đề yếu: {weak_topic}", width="stretch"):
                 prompt_clicked = f"Tôi thường bị nhầm phần {weak_topic}, hãy giảng và kiểm tra lại giúp tôi."
         with qb3:
-            if st.button("🛡️ Thử hỏi ngoài tài liệu", key="qp_oos", help="Kiểm tra khả năng từ chối bịa đặt ngoài nguồn", width="stretch"):
+            if st.button("Thử hỏi ngoài tài liệu", icon=":material/shield:", key="qp_oos", help="Kiểm tra khả năng từ chối bịa đặt ngoài nguồn", width="stretch"):
                 prompt_clicked = "Giá vàng hôm nay trên thị trường quốc tế là bao nhiêu?"
 
+        user_msg = st.chat_input("Hỏi về tài liệu hoặc trả lời câu hỏi của Gia sư...", key="coach_chat_input")
+
+    # Cột bối cảnh bị ẩn thì vẫn cần một chỗ chứa (không hiển thị) để giữ nguyên luồng xử lý Vision bên dưới.
+    with col_side if col_side is not None else st.container(key="sc_hidden_side"):
+        with st.container(border=True, key="card_coach_ctx"):
+            st.markdown(
+                render_coach_context_html(
+                    doc_title, topics_preview, dna.name, dna.overall_level, len(dna.active_misconceptions)
+                ),
+                unsafe_allow_html=True,
+            )
+            if dna.active_misconceptions:
+                for m in dna.active_misconceptions[:2]:
+                    st.markdown(
+                        render_misconception_card_html(m.topic, m.description, m.occurrences, False),
+                        unsafe_allow_html=True,
+                    )
+            else:
+                st.caption("Chưa ghi nhận lỗi tư duy đang mở — Gia sư sẽ tự đẩy độ sâu lên mức Vận dụng / Phân tích.")
         with st.expander(
-            "📎 Đính kèm ảnh bài tập / Sơ đồ (Vision AI)",
+            "Chấm ảnh bài tập / sơ đồ (Vision AI)",
+            icon=":material/attach_file:",
             expanded=bool(st.session_state.get("vision_critique")),
         ):
             samples = vision.list_sample_vision_images() if is_sample_doc else []
@@ -1623,25 +1975,14 @@ def _render_tab_coach(dna: LearnerDNA) -> None:
             if crit:
                 st.markdown(f"**Nhận xét tổng quát ({crit.topic}):** {crit.overall_assessment}")
                 for st_step in crit.steps:
-                    badge_cls = "mastered" if st_step.status == "Đúng" else ("learning" if st_step.status == "Cần chỉnh" else "misconception")
-                    ic_name = "check-circle" if st_step.status == "Đúng" else ("clock" if st_step.status == "Cần chỉnh" else "alert-triangle")
                     st.markdown(
-                        clean_html(
-                            f"""
-                            <div style="border:1px solid var(--border);border-radius:8px;padding:0.55rem 0.7rem;margin:0.35rem 0;background:var(--bg-canvas);">
-                              <div style="display:flex;justify-content:space-between;align-items:center;gap:0.4rem;">
-                                <b style="font-size:0.86rem;">{esc(st_step.step_name)}</b>
-                                <span class="sc-status-badge {badge_cls}">{icon_svg(ic_name, 13)} {esc(st_step.status)}</span>
-                              </div>
-                              <div style="font-size:0.83rem;color:var(--ink-secondary);margin-top:4px;">{esc(st_step.feedback)} <span class="sc-mono-chip">{esc(st_step.page_ref)}</span></div>
-                            </div>
-                            """
+                        render_vision_step_html(
+                            st_step.step_name, st_step.status, st_step.feedback, st_step.page_ref
                         ),
                         unsafe_allow_html=True,
                     )
                 st.info(f"**Gợi ý sửa vừa tầm ({dna.overall_level}):** {crit.hint_for_learner}")
 
-    user_msg = st.chat_input("Hỏi bất cứ điều gì về tài liệu hoặc trả lời câu hỏi vặn của Gia sư...")
     active_query = (pending["query"] if pending else None) or prompt_clicked or user_msg
     if active_query:
         try:
@@ -1649,6 +1990,9 @@ def _render_tab_coach(dna: LearnerDNA) -> None:
                 with st.chat_message("user"):
                     st.markdown(active_query)
                 with st.chat_message("assistant"):
+                    # Hiện "đang suy nghĩ" cho tới khi có chữ đầu tiên, tránh bong bóng trống.
+                    thinking = st.empty()
+                    thinking.markdown(render_typing_html(), unsafe_allow_html=True)
                     gen, result_box = stream_coach_turn(
                         query=active_query,
                         kb=st.session_state.kb,
@@ -1661,15 +2005,19 @@ def _render_tab_coach(dna: LearnerDNA) -> None:
                         demo_mode=_is_demo_mode(),
                         chat_history=history,
                     )
-                    st.write_stream(gen)
+
+                    def _stream_and_clear_typing():
+                        first = True
+                        for chunk in gen:
+                            if first:
+                                thinking.empty()
+                                first = False
+                            yield chunk
+                        thinking.empty()
+
+                    st.write_stream(_stream_and_clear_typing())
             if "turn" in result_box:
-                turn = result_box["turn"]
-                history.append({"role": "user", "content": active_query})
-                history.append({"role": "assistant", "content": turn.answer, "turn": turn})
-                db.append_chat_message(dna.learner_id, st.session_state.doc_id, "user", active_query)
-                db.append_chat_message(
-                    dna.learner_id, st.session_state.doc_id, "assistant", turn.answer, turn=turn
-                )
+                _persist_turn(dna, history, active_query, result_box["turn"])
             st.session_state.coach_failed = None
             st.rerun()
         except _LLM_ERRORS as e:
@@ -1678,6 +2026,493 @@ def _render_tab_coach(dna: LearnerDNA) -> None:
                 st.rerun()
             else:
                 st.error(str(e))
+
+
+CONFIDENCE_OPTIONS = ["Đoán mò", "Bình thường", "Chắc chắn"]
+
+
+def _quiz_save_current(state: str, version: int, quiz: Quiz, key_q: str, key_conf: str, key_txt: str) -> None:
+    """Chép câu trả lời của câu đang hiển thị từ widget vào bộ nhớ phiên (widget của câu khác không được vẽ)."""
+    answers: dict = st.session_state.setdefault(f"{state}_answers", {})
+    pos = int(st.session_state.get(f"{state}_pos", 0) or 0)
+    if not 0 <= pos < len(quiz.questions):
+        return
+    q = quiz.questions[pos]
+    entry = dict(answers.get(pos) or {})
+    kq, kc, kt = f"{key_q}{version}_{pos}", f"{key_conf}{version}_{pos}", f"{key_txt}{version}_{pos}"
+    if q.qtype == "mcq":
+        if kq in st.session_state:
+            entry["pick"] = st.session_state[kq]
+    elif kt in st.session_state:
+        entry["text"] = st.session_state[kt] or ""
+    if kc in st.session_state:
+        entry["conf"] = st.session_state[kc] or "Bình thường"
+    answers[pos] = entry
+
+
+def _quiz_move(state: str, version: int, quiz: Quiz, key_q: str, key_conf: str, key_txt: str, delta: int) -> None:
+    _quiz_save_current(state, version, quiz, key_q, key_conf, key_txt)
+    pos = int(st.session_state.get(f"{state}_pos", 0) or 0) + delta
+    st.session_state[f"{state}_pos"] = max(0, min(len(quiz.questions) - 1, pos))
+
+
+def _quiz_player(
+    quiz: Quiz,
+    version: int,
+    *,
+    state: str,
+    key_q: str,
+    key_conf: str,
+    key_txt: str,
+    submit_key: str,
+    submit_label: str = "Nộp bài & Chẩn đoán",
+) -> tuple[bool, list[int | None], list[str], list[str]]:
+    """Làm quiz từng câu một với thanh tiến độ; giữ mức tự tin cho từng câu.
+
+    Trả (đã bấm nộp?, lựa chọn trắc nghiệm, mức tự tin, câu trả lời tự gõ) cho toàn bộ câu hỏi."""
+    total = len(quiz.questions)
+    if st.session_state.get(f"{state}_answers_ver") != version:
+        st.session_state[f"{state}_answers"] = {}
+        st.session_state[f"{state}_answers_ver"] = version
+        st.session_state[f"{state}_pos"] = 0
+    answers: dict = st.session_state[f"{state}_answers"]
+    pos = max(0, min(total - 1, int(st.session_state.get(f"{state}_pos", 0) or 0)))
+    st.session_state[f"{state}_pos"] = pos
+    q = quiz.questions[pos]
+    saved = answers.get(pos) or {}
+    nav_args = (state, version, quiz, key_q, key_conf, key_txt)
+
+    def _done(i: int) -> bool:
+        entry = answers.get(i) or {}
+        if quiz.questions[i].qtype == "mcq":
+            return entry.get("pick") is not None
+        return bool((entry.get("text") or "").strip())
+
+    col_q, col_side = st.columns([8, 3.5], gap="large")
+    with col_q:
+        st.progress((pos + 1) / total, text=f"Câu {pos + 1}/{total}")
+        with st.container(border=True, key=f"card_q_{state}"):
+            st.caption(
+                f"{QTYPE_LABELS.get(q.qtype, 'Trắc nghiệm')} · {q.topic} · "
+                f"Mức Bloom: {q.bloom_level} · {q.page_ref or '[Tài liệu]'}"
+            )
+            st.markdown(f"**Câu {pos + 1}/{total}.** {display_question(q)}")
+            pick, text = saved.get("pick"), saved.get("text", "")
+            if q.qtype == "mcq":
+                pick = st.radio(
+                    f"Câu {pos + 1}",
+                    options=range(len(q.options)),
+                    format_func=lambda k, opts=q.options: f"{'ABCD'[k]}. {opts[k]}",
+                    index=saved.get("pick"),
+                    key=f"{key_q}{version}_{pos}",
+                    label_visibility="collapsed",
+                )
+            elif q.qtype == "fill_blank":
+                text = st.text_input(
+                    "Từ / cụm từ còn thiếu",
+                    value=saved.get("text", ""),
+                    key=f"{key_txt}{version}_{pos}",
+                    placeholder="Gõ đáp án của bạn…",
+                )
+            else:
+                text = st.text_area(
+                    "Câu trả lời của bạn (1–3 câu)",
+                    value=saved.get("text", ""),
+                    key=f"{key_txt}{version}_{pos}",
+                    height=110,
+                    placeholder="Trả lời ngắn gọn bằng lời của bạn…",
+                )
+            conf = st.segmented_control(
+                "Độ tự tin",
+                options=CONFIDENCE_OPTIONS,
+                default=saved.get("conf", "Bình thường"),
+                key=f"{key_conf}{version}_{pos}",
+            )
+        answers[pos] = {"pick": pick, "text": text or "", "conf": conf or "Bình thường"}
+        b_prev, b_next = st.columns(2)
+        b_prev.button(
+            "Câu trước",
+            icon=":material/arrow_back:",
+            key=f"{state}_prev",
+            disabled=pos == 0,
+            on_click=_quiz_move,
+            args=(*nav_args, -1),
+            width="stretch",
+        )
+        b_next.button(
+            "Câu tiếp",
+            icon=":material/arrow_forward:",
+            key=f"{state}_next",
+            disabled=pos >= total - 1,
+            type="primary" if pos < total - 1 else "secondary",
+            on_click=_quiz_move,
+            args=(*nav_args, 1),
+            width="stretch",
+        )
+    done_n = sum(_done(i) for i in range(total))
+    with col_side:
+        with st.container(border=True, key=f"card_{state}_side"):
+            st.markdown(f"**Đã trả lời {done_n}/{total} câu**")
+            chips = "".join(
+                f'<span class="{"on" if _done(i) else ""}{" cur" if i == pos else ""}">{i + 1}</span>'
+                for i in range(total)
+            )
+            st.markdown(f'<div class="sc-chips">{chips}</div>', unsafe_allow_html=True)
+            st.caption("Bạn có thể quay lại sửa trước khi nộp. Câu bỏ trống tính sai khi nộp.")
+        submitted = st.button(
+            submit_label,
+            icon=":material/done_all:",
+            type="primary" if (pos == total - 1 or done_n == total) else "secondary",
+            key=submit_key,
+            width="stretch",
+        )
+    picks = [(answers.get(i) or {}).get("pick") for i in range(total)]
+    confs = [(answers.get(i) or {}).get("conf") or "Bình thường" for i in range(total)]
+    texts = [(answers.get(i) or {}).get("text") or "" for i in range(total)]
+    return submitted, picks, confs, texts
+
+
+def _item_answered(it: GradedQuestion) -> bool:
+    return it.chosen_index is not None or bool((it.learner_text or "").strip())
+
+
+def _quiz_result_view(
+    result: QuizResult,
+    *,
+    prefix: str,
+    on_new,
+    on_retry=None,
+    new_label: str = "Tạo quiz mới",
+) -> None:
+    """Trang kết quả dùng chung cho Quiz thích ứng và phiên Ôn hôm nay."""
+    wrong = sum(1 for it in result.items if not it.is_correct and _item_answered(it))
+    skipped = sum(1 for it in result.items if not _item_answered(it))
+    ratio = result.score / result.total if result.total else 0.0
+    col_side, col_rev = st.columns([3.5, 8], gap="large")
+    with col_side:
+        with st.container(border=True, key=f"card_{prefix}quiz_score"):
+            st.markdown(
+                f'<div class="sc-score-hero">{result.score}<small>/{result.total}</small></div>',
+                unsafe_allow_html=True,
+            )
+            st.progress(ratio, text=f"Tỉ lệ đúng {ratio:.0%}")
+            chips = "".join(
+                f'<span class="{"on" if it.is_correct else ("bad" if _item_answered(it) else "")}">{i}</span>'
+                for i, it in enumerate(result.items, start=1)
+            )
+            st.markdown(f'<div class="sc-chips">{chips}</div>', unsafe_allow_html=True)
+            st.caption(f"Đúng {result.score} · Sai {wrong} · Bỏ trống {skipped}")
+        if result.blind_spot_count:
+            st.error(f"Cảnh báo {result.blind_spot_count} Điểm mù nguy hiểm (Tự tin chắc chắn nhưng trả lời Sai).")
+        if result.lucky_guess_count:
+            st.info(f"Có {result.lucky_guess_count} câu Đúng do đoán mò — hệ thống vẫn giữ lịch nhắc ôn lại.")
+        if result.detected_misconceptions:
+            st.warning(f"Phát hiện {len(result.detected_misconceptions)} lỗi tư duy đã được ghi vào hồ sơ Learner DNA.")
+        only_wrong = (
+            st.toggle("Chỉ xem câu sai", value=False, key=f"{prefix}only_wrong") if result.score < result.total else False
+        )
+        st.button(new_label, icon=":material/add:", type="primary", on_click=on_new, key=f"{prefix}btn_res_new", width="stretch")
+        if on_retry is not None:
+            st.button(
+                "Làm lại quiz này", icon=":material/replay:", on_click=on_retry, key=f"{prefix}btn_res_retry", width="stretch"
+            )
+
+    with col_rev:
+        shown = [(i, it) for i, it in enumerate(result.items, start=1) if not (only_wrong and it.is_correct)]
+        grid = st.columns(2, gap="medium")
+        for pos, (i, it) in enumerate(shown):
+            answered = _item_answered(it)
+            badge = "Đúng" if it.is_correct else ("Sai" if answered else "Bỏ trống")
+            with grid[pos % 2].container(border=True, key=f"card_{prefix}r_{i}"):
+                cal_suffix = f" · `{it.calibration_tag}`" if it.calibration_tag else ""
+                st.markdown(f"**Câu {i}.** {it.question} &nbsp; `{badge}`{cal_suffix}")
+                if it.qtype != "mcq":
+                    cls = "ok" if it.is_correct else "bad"
+                    st.markdown(
+                        f'<div class="sc-answer-box {cls}"><b>Bạn trả lời:</b> '
+                        f'{esc((it.learner_text or "").strip() or "(bỏ trống)")}</div>'
+                        f'<div class="sc-answer-box ok"><b>Đáp án mẫu:</b> {esc(it.expected_text)}</div>',
+                        unsafe_allow_html=True,
+                    )
+                    if it.grader_feedback and answered:
+                        st.caption(f"Nhận xét chấm: {it.grader_feedback}")
+                else:
+                    for k, opt in enumerate(it.options):
+                        line = f"{'ABCD'[k]}. {opt}"
+                        if k == it.correct_index:
+                            st.markdown(f":green[**✔ {line}**]")
+                        elif k == it.chosen_index:
+                            st.markdown(f":red[✘ ~~{line}~~ (bạn chọn)]")
+                        else:
+                            st.markdown(f"&nbsp;&nbsp;&nbsp;{line}")
+                if it.explanation:
+                    st.info(f"{it.explanation} ({it.page_ref or 'Tài liệu'})")
+                if it.evidence:
+                    st.caption(f'Bằng chứng nguồn: "{it.evidence}"')
+                if not it.is_correct:
+                    if not answered:
+                        st.warning(f"Chưa trả lời câu này ({it.topic}) — hệ thống tính sai để kiểm tra lại phần kiến thức này.")
+                    elif it.diagnosed_misconception:
+                        st.markdown(
+                            render_misconception_card_html(f"Chẩn đoán lỗi ({it.topic})", it.diagnosed_misconception),
+                            unsafe_allow_html=True,
+                        )
+                    st.button(
+                        "Nhờ Gia sư gỡ rối câu này",
+                        icon=":material/psychology:",
+                        key=f"{prefix}rem_coach_{i}",
+                        on_click=_jump_to_coach_remediation,
+                        args=(it,),
+                        width="stretch",
+                    )
+
+
+def _reset_review() -> None:
+    st.session_state.review_quiz = None
+    st.session_state.review_result = None
+    st.session_state.review_targets = []
+
+
+def _go_practice() -> None:
+    _set_nav("practice")
+
+
+def _go_map() -> None:
+    _set_nav("map")
+
+
+def _render_tab_review(dna: LearnerDNA) -> None:
+    """Ôn hôm nay: gom khái niệm đến hạn ôn và lỗi tư duy đang mở vào một phiên quiz ngắn, kèm chuỗi ngày học."""
+    cmap: DocumentConceptMap = st.session_state.concept_map
+    concept_names = [c.name for c in cmap.concepts]
+    due_n, misc_n = _review_counts(dna)
+    st.markdown(render_streak_html(db.get_study_streak(dna.learner_id), due_n, misc_n), unsafe_allow_html=True)
+
+    quiz: Quiz | None = st.session_state.get("review_quiz")
+    result: QuizResult | None = st.session_state.get("review_result")
+
+    if quiz is None:
+        targets = adaptive.collect_review_targets(dna, cmap)
+        with st.container(border=True, key="card_review_intro"):
+            if not targets:
+                st.success("Hôm nay không có khái niệm nào đến hạn ôn và không còn lỗi tư duy đang mở.")
+                st.caption("Bạn vẫn có thể luyện thêm một bài quiz để giữ chuỗi ngày học.")
+                n1, n2 = st.columns(2)
+                n1.button(
+                    "Luyện Quiz thích ứng", icon=":material/quiz:", key="btn_review_to_quiz",
+                    on_click=_go_practice, type="primary", width="stretch",
+                )
+                n2.button(
+                    "Xem Bản đồ năng lực", icon=":material/account_tree:", key="btn_review_to_map",
+                    on_click=_go_map, width="stretch",
+                )
+            else:
+                st.markdown("#### Phiên ôn hôm nay")
+                st.caption(
+                    f"{len(targets)} mục cần ôn · khoảng 5–10 phút. Lỗi tư duy đang mở được hỏi trước, "
+                    "sau đó tới các khái niệm đến hạn theo lịch lặp lại ngắt quãng."
+                )
+                st.markdown(render_review_targets_html(targets[:8]), unsafe_allow_html=True)
+                if len(targets) > 8:
+                    st.caption(f"Còn {len(targets) - 8} mục khác sẽ được xếp vào các phiên sau.")
+                if st.button(
+                    "Bắt đầu phiên ôn", icon=":material/play_arrow:", type="primary", key="btn_start_review", width="stretch"
+                ):
+                    try:
+                        with st.spinner("Đang chuẩn bị câu hỏi ôn tập bám tài liệu..."):
+                            rq, used = adaptive.build_review_session(
+                                text=st.session_state.doc_text,
+                                learner_dna=dna,
+                                concept_map=cmap,
+                                model=st.session_state.selected_model,
+                                demo_mode=_is_demo_mode(),
+                            )
+                    except _LLM_ERRORS as e:
+                        st.error(str(e))
+                    else:
+                        if not rq.questions:
+                            st.warning("Chưa tạo được câu hỏi ôn tập từ tài liệu này. Hãy thử Quiz thích ứng ở trang Luyện tập.")
+                        else:
+                            st.session_state.review_quiz = rq
+                            st.session_state.review_targets = used
+                            st.session_state.review_result = None
+                            st.session_state.review_version = st.session_state.get("review_version", 0) + 1
+                            st.rerun()
+    elif result is None:
+        topics = ", ".join(t["topic"] for t in st.session_state.get("review_targets") or [])
+        if topics:
+            st.caption(f"Đang ôn: {topics}")
+        version = st.session_state.get("review_version", 0)
+        submitted, picks, confs, texts = _quiz_player(
+            quiz, version, state="review", key_q="rvq", key_conf="rvconf_", key_txt="rvt",
+            submit_key="btn_submit_review", submit_label="Nộp bài ôn tập",
+        )
+        if submitted:
+            res = grade(
+                quiz, picks, confidences=confs, text_answers=texts,
+                demo_mode=_is_demo_mode(), model=st.session_state.selected_model,
+            )
+            # Token theo phiên ôn: bấm nộp lặp (double click) không ghi điểm hai lần.
+            tok = _submission_token("review", version)
+            done, _old = _cached_submission(tok)
+            if not done:
+                adaptive.record_quiz_outcome(
+                    learner_id=dna.learner_id,
+                    doc_id=st.session_state.doc_id,
+                    result=res,
+                    model=st.session_state.selected_model if not _is_demo_mode() else "Offline-Demo",
+                    difficulty="Ôn tập",
+                    concepts_order=concept_names,
+                )
+                _remember_submission(tok, res)
+            st.session_state.review_result = res
+            st.rerun()
+        st.button("Hủy phiên ôn", on_click=_reset_review, key="btn_abandon_review")
+    else:
+        st.success(
+            f"Hoàn thành phiên ôn hôm nay: {result.score}/{result.total} câu đúng. "
+            "Lịch ôn và sổ lỗi tư duy đã được cập nhật."
+        )
+        _quiz_result_view(result, prefix="rv_", on_new=_reset_review, new_label="Xong phiên ôn")
+
+
+def _clear_doc_focus() -> None:
+    st.session_state.doc_focus_page = ""
+    st.session_state.doc_focus_snips = []
+
+
+def _render_tab_doc() -> None:
+    """Trình đọc toàn bộ tài liệu đang học, chia theo mục có neo trùng với nhãn trích dẫn của Gia sư."""
+    sections: list[dict] = st.session_state.get("doc_sections") or []
+    if not sections:
+        st.info("Tài liệu này chưa có nội dung theo mục để hiển thị.")
+        return
+    focus = st.session_state.get("doc_focus_page") or ""
+    snips = st.session_state.get("doc_focus_snips") or []
+    focus_idx = _sections_for_citation(focus, sections, snips) if focus else []
+
+    col_toc, col_body = st.columns([3.4, 8.6], gap="large")
+    with col_toc:
+        with st.container(border=True, key="card_doc_toc"):
+            query = (
+                st.text_input(
+                    "Tìm trong tài liệu", key="doc_search", placeholder="Nhập từ khóa…", icon=":material/search:"
+                )
+                or ""
+            ).strip()
+            shown = [i for i, s in enumerate(sections) if not query or query.lower() in str(s.get("text", "")).lower()]
+            total_chars = sum(len(str(s.get("text", ""))) for s in sections)
+            st.caption(f"{len(shown)}/{len(sections)} mục · {total_chars:,} ký tự")
+            st.markdown(render_doc_toc_html(sections, shown), unsafe_allow_html=True)
+    with col_body:
+        st.markdown(f"**{st.session_state.get('doc_title') or 'Tài liệu'}**")
+        if focus:
+            fc1, fc2 = st.columns([8.4, 3.6], vertical_alignment="center")
+            if focus_idx:
+                fc1.info(f"Đang đánh dấu nguồn trích dẫn {focus}: phần tô vàng là đoạn Gia sư đã dùng.")
+            else:
+                fc1.warning(f"Không tìm thấy mục {focus} trong tài liệu này.")
+            fc2.button("Bỏ đánh dấu", icon=":material/close:", key="btn_doc_clear_focus", on_click=_clear_doc_focus, width="stretch")
+        if not shown:
+            st.warning("Không có mục nào chứa từ khóa này.")
+        for i in shown:
+            is_focus = i in focus_idx
+            st.markdown(
+                render_doc_section_html(sections[i], i, snips if is_focus else None, focused=is_focus, query=query),
+                unsafe_allow_html=True,
+            )
+        if focus_idx and focus_idx[0] in shown:
+            # Cuộn tới mục được trích dẫn sau khi trang vẽ xong.
+            anchor = section_anchor(focus_idx[0])
+            st.html(
+                "<script>setTimeout(function(){"
+                f"var d=document.getElementById('{anchor}')||(window.parent&&window.parent.document.getElementById('{anchor}'));"
+                "if(d){d.scrollIntoView({behavior:'smooth',block:'start'});}"
+                "},250);</script>",
+                unsafe_allow_javascript=True,
+            )
+
+
+# Màu đường biểu đồ: thứ tự cố định theo khái niệm (không đổi màu khi bật/tắt đường khác).
+_SERIES_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"]
+_OVERALL_SERIES = "Tổng thể"
+
+
+def _render_progress_chart(dna: LearnerDNA) -> None:
+    """Biểu đồ điểm thành thạo theo ngày (tổng thể + tùy chọn từng khái niệm) từ bảng mastery_history."""
+    timeline = db.get_mastery_timeline(dna.learner_id, st.session_state.doc_id)
+    with st.container(border=True, key="card_progress_chart"):
+        st.markdown("#### Tiến bộ theo thời gian")
+        if not timeline:
+            st.caption("Chưa có dữ liệu: làm một bài quiz hoặc phiên ôn, điểm thành thạo mỗi ngày sẽ được vẽ ở đây.")
+            return
+        cmap: DocumentConceptMap | None = st.session_state.get("concept_map")
+        ordered = [c.name for c in cmap.concepts] if cmap else []
+        seen = {n for t in timeline for n in t["concepts"]}
+        names = [n for n in ordered if n in seen] + sorted(seen - set(ordered))
+        # Tối đa 7 khái niệm có màu riêng (màu thứ nhất dành cho đường Tổng thể).
+        color_of = {_OVERALL_SERIES: _SERIES_COLORS[0]}
+        color_of.update({n: _SERIES_COLORS[1 + i] for i, n in enumerate(names[: len(_SERIES_COLORS) - 1])})
+        picked = st.multiselect(
+            "Vẽ thêm theo khái niệm",
+            options=list(color_of)[1:],
+            default=[],
+            key="progress_concepts",
+            placeholder="Chọn khái niệm để so sánh với đường Tổng thể",
+        )
+        series = [_OVERALL_SERIES] + [n for n in color_of if n in picked]
+        rows = []
+        for t in timeline:
+            rows.append({"day": t["day"], "series": _OVERALL_SERIES, "score": t["overall"]})
+            rows.extend(
+                {"day": t["day"], "series": n, "score": t["concepts"][n]} for n in series[1:] if n in t["concepts"]
+            )
+        import altair as alt
+
+        chart = (
+            alt.Chart(alt.Data(values=rows))
+            .mark_line(strokeWidth=2, point=alt.OverlayMarkDef(size=70, filled=True, stroke="#FFFFFF", strokeWidth=2))
+            .encode(
+                x=alt.X("day:O", title=None, axis=alt.Axis(labelAngle=0, labelColor="#667085", domainColor="#E4E7EC", ticks=False)),
+                y=alt.Y(
+                    "score:Q",
+                    title="Điểm thành thạo (%)",
+                    scale=alt.Scale(domain=[0, 100]),
+                    axis=alt.Axis(gridColor="#EEF0F4", labelColor="#667085", titleColor="#667085", domain=False, ticks=False),
+                ),
+                color=alt.Color(
+                    "series:N",
+                    scale=alt.Scale(domain=series, range=[color_of[s] for s in series]),
+                    legend=alt.Legend(title=None, orient="top", labelColor="#3A4252") if len(series) > 1 else None,
+                ),
+                tooltip=[
+                    alt.Tooltip("day:O", title="Ngày"),
+                    alt.Tooltip("series:N", title="Đường"),
+                    alt.Tooltip("score:Q", title="Điểm (%)", format=".0f"),
+                ],
+            )
+            .properties(height=260)
+            .configure_view(strokeWidth=0)
+        )
+        st.altair_chart(chart, width="stretch")
+        first, last = timeline[0], timeline[-1]
+        if len(timeline) > 1:
+            delta = last["overall"] - first["overall"]
+            st.caption(
+                f"Tổng thể: {first['overall']:.0f}% ({first['day']}) → {last['overall']:.0f}% ({last['day']}), "
+                f"{'tăng' if delta >= 0 else 'giảm'} {abs(delta):.0f} điểm sau {len(timeline)} ngày có học."
+            )
+        else:
+            st.caption(f"Mới có dữ liệu của 1 ngày ({last['day']}, tổng thể {last['overall']:.0f}%). Học thêm ngày khác để thấy xu hướng.")
+        with st.expander("Xem dạng bảng", icon=":material/table_rows:"):
+            st.dataframe(
+                [
+                    {"Ngày": t["day"], _OVERALL_SERIES: t["overall"], **{n: t["concepts"].get(n) for n in series[1:]}}
+                    for t in timeline
+                ],
+                hide_index=True,
+                width="stretch",
+            )
 
 
 def _render_tab_practice(dna: LearnerDNA) -> None:
@@ -1699,7 +2534,7 @@ def _render_tab_practice(dna: LearnerDNA) -> None:
         if quiz is None:
             col_cfg, col_tip = st.columns([7, 5], gap="large")
             with col_cfg:
-                with st.container(border=True):
+                with st.container(border=True, key="card_quiz_cfg"):
                     st.markdown("#### Thiết lập Quiz Thích ứng theo Learner DNA")
                     topic_opts = ["Tự động chọn chủ đề yếu nhất"] + concept_names
                     if st.session_state.quiz_focus_select not in topic_opts:
@@ -1707,6 +2542,12 @@ def _render_tab_practice(dna: LearnerDNA) -> None:
                     focus_choice = st.selectbox("Chủ đề ưu tiên", options=topic_opts, key="quiz_focus_select")
                     diff_opts = ["Tự động theo năng lực"] + config.DIFFICULTIES
                     diff_choice = st.selectbox("Độ khó", options=diff_opts, key="quiz_diff_select")
+                    type_choice = st.selectbox(
+                        "Dạng câu hỏi",
+                        options=QUESTION_MODES,
+                        key="quiz_type_select",
+                        help="Câu điền chỗ trống và tự luận ngắn do AI chấm (khi chưa có API key thì chấm theo từ khóa).",
+                    )
                     n_q = st.slider("Số câu hỏi", config.MIN_QUESTIONS, config.MAX_QUESTIONS, 5)
                     if st.button("Tạo Quiz Thích ứng", icon=":material/play_arrow:", type="primary", key="btn_gen_quiz", width="stretch"):
                         try:
@@ -1722,7 +2563,7 @@ def _render_tab_practice(dna: LearnerDNA) -> None:
                                     model=st.session_state.selected_model,
                                     demo_mode=_is_demo_mode(),
                                 )
-                            st.session_state.quiz = generated
+                            st.session_state.quiz = apply_question_types(generated, type_choice)
                             # Lưu độ khó/chủ đề thực sự dùng vào khóa không phải widget (selectbox sẽ không được vẽ khi đang làm bài).
                             st.session_state.quiz_difficulty_used = diff_val or "Tự động"
                             st.session_state.quiz_focus_used = focus_val or "Tự động"
@@ -1734,7 +2575,7 @@ def _render_tab_practice(dna: LearnerDNA) -> None:
                         except _LLM_ERRORS as e:
                             st.error(str(e))
             with col_tip:
-                with st.container(border=True):
+                with st.container(border=True, key="card_quiz_tip"):
                     st.markdown("#### Cách Quiz này hiểu bạn")
                     st.markdown(
                         f"- **Hồ sơ hiện tại:** {dna.name} (`{dna.overall_level}` · TB `{dna.mastery_avg:.0f}%`)\n"
@@ -1745,46 +2586,19 @@ def _render_tab_practice(dna: LearnerDNA) -> None:
             if st.session_state.quiz_strategy:
                 st.info(st.session_state.quiz_strategy)
             version = st.session_state.get("quiz_version", 0)
-            total = len(quiz.questions)
-            picks: list[int | None] = []
-            confs: list[str] = []
-            with st.form(f"adaptive_quiz_form_{version}", border=False):
-                col_q, col_side = st.columns([8, 3.5], gap="large")
-                with col_q:
-                    grid = st.columns(2, gap="medium")
-                    for i, q in enumerate(quiz.questions):
-                        with grid[i % 2].container(border=True):
-                            st.caption(f"{q.topic} · Mức Bloom: {q.bloom_level} · {q.page_ref or '[Tài liệu]'}")
-                            st.markdown(f"**Câu {i + 1}/{total}.** {q.question}")
-                            choice = st.radio(
-                                f"Câu {i + 1}",
-                                options=range(len(q.options)),
-                                format_func=lambda k, opts=q.options: f"{'ABCD'[k]}. {opts[k]}",
-                                index=None,
-                                key=f"q{version}_{i}",
-                                label_visibility="collapsed",
-                            )
-                            conf = st.segmented_control(
-                                "Độ tự tin",
-                                options=["Đoán mò", "Bình thường", "Chắc chắn"],
-                                default="Bình thường",
-                                key=f"conf_{version}_{i}",
-                            )
-                            picks.append(choice)
-                            confs.append(conf or "Bình thường")
-                with col_side:
-                    with st.container(border=True):
-                        st.markdown(f"**Bài kiểm tra gồm {total} câu**")
-                        st.caption("Chọn đáp án và mức tự tin cho từng câu rồi bấm Nộp bài (không làm mới trang khi chọn). Câu bỏ trống tính sai khi nộp.")
-                    submitted_quiz = st.form_submit_button(
-                        "Nộp bài & Chẩn đoán",
-                        icon=":material/done_all:",
-                        type="primary",
-                        key="btn_submit_quiz",
-                        width="stretch",
-                    )
+            submitted_quiz, picks, confs, texts = _quiz_player(
+                quiz, version, state="quiz", key_q="q", key_conf="conf_", key_txt="qt", submit_key="btn_submit_quiz"
+            )
             if submitted_quiz:
-                res = grade(quiz, picks, confidences=confs)
+                with st.spinner("Đang chấm bài..."):
+                    res = grade(
+                        quiz,
+                        picks,
+                        confidences=confs,
+                        text_answers=texts,
+                        demo_mode=_is_demo_mode(),
+                        model=st.session_state.selected_model,
+                    )
                 st.session_state.quiz_result = res
                 if not st.session_state.quiz_recorded:
                     adaptive.record_quiz_outcome(
@@ -1799,76 +2613,11 @@ def _render_tab_practice(dna: LearnerDNA) -> None:
                 st.rerun()
             st.button("Tạo quiz khác", on_click=_new_quiz, key="btn_abandon_quiz")
         else:
-            wrong = sum(1 for it in result.items if not it.is_correct and it.chosen_index is not None)
-            skipped = sum(1 for it in result.items if it.chosen_index is None)
-            ratio = result.score / result.total if result.total else 0.0
-            col_side, col_rev = st.columns([3.5, 8], gap="large")
-            with col_side:
-                with st.container(border=True):
-                    st.markdown(
-                        f'<div class="sc-score-hero">{result.score}<small>/{result.total}</small></div>',
-                        unsafe_allow_html=True,
-                    )
-                    st.progress(ratio, text=f"Tỉ lệ đúng {ratio:.0%}")
-                    chips = "".join(
-                        f'<span class="{"on" if it.is_correct else ("bad" if it.chosen_index is not None else "")}">{i}</span>'
-                        for i, it in enumerate(result.items, start=1)
-                    )
-                    st.markdown(f'<div class="sc-chips">{chips}</div>', unsafe_allow_html=True)
-                    st.caption(f"Đúng {result.score} · Sai {wrong} · Bỏ trống {skipped}")
-                if result.blind_spot_count:
-                    st.error(f"Cảnh báo {result.blind_spot_count} Điểm mù nguy hiểm (Tự tin chắc chắn nhưng trả lời Sai).")
-                if result.lucky_guess_count:
-                    st.info(f"Có {result.lucky_guess_count} câu Đúng do đoán mò — hệ thống vẫn giữ lịch nhắc ôn lại.")
-                if result.detected_misconceptions:
-                    st.warning(f"Phát hiện {len(result.detected_misconceptions)} lỗi tư duy đã được ghi vào hồ sơ Learner DNA.")
-                only_wrong = st.toggle("Chỉ xem câu sai", value=False) if result.score < result.total else False
-                st.button("Tạo quiz mới", icon=":material/add:", type="primary", on_click=_new_quiz, key="btn_res_new", width="stretch")
-                st.button("Làm lại quiz này", icon=":material/replay:", on_click=_retry_quiz, key="btn_res_retry", width="stretch")
-
-            with col_rev:
-                shown = [(i, it) for i, it in enumerate(result.items, start=1) if not (only_wrong and it.is_correct)]
-                grid = st.columns(2, gap="medium")
-                for pos, (i, it) in enumerate(shown):
-                    badge = "Đúng" if it.is_correct else ("Bỏ trống" if it.chosen_index is None else "Sai")
-                    with grid[pos % 2].container(border=True):
-                        cal_suffix = f" · `{it.calibration_tag}`" if it.calibration_tag else ""
-                        st.markdown(f"**Câu {i}.** {it.question} &nbsp; `{badge}`{cal_suffix}")
-                        for k, opt in enumerate(it.options):
-                            line = f"{'ABCD'[k]}. {opt}"
-                            if k == it.correct_index:
-                                st.markdown(f":green[**✔ {line}**]")
-                            elif k == it.chosen_index:
-                                st.markdown(f":red[✘ ~~{line}~~ (bạn chọn)]")
-                            else:
-                                st.markdown(f"&nbsp;&nbsp;&nbsp;{line}")
-                        if it.explanation:
-                            st.info(f"{it.explanation} ({it.page_ref or 'Tài liệu'})")
-                        if it.evidence:
-                            st.caption(f'Bằng chứng nguồn: "{it.evidence}"')
-                        if not it.is_correct:
-                            if it.chosen_index is None:
-                                st.warning(f"Chưa trả lời câu này ({it.topic}) — hệ thống tính sai để kiểm tra lại phần kiến thức này.")
-                            elif it.diagnosed_misconception:
-                                st.markdown(
-                                    render_misconception_card_html(
-                                        f"Chẩn đoán lỗi ({it.topic})",
-                                        it.diagnosed_misconception,
-                                    ),
-                                    unsafe_allow_html=True,
-                                )
-                            st.button(
-                                "Nhờ Gia sư gỡ rối câu này",
-                                icon=":material/psychology:",
-                                key=f"rem_coach_{i}",
-                                on_click=_jump_to_coach_remediation,
-                                args=(it,),
-                                width="stretch",
-                            )
+            _quiz_result_view(result, prefix="", on_new=_new_quiz, on_retry=_retry_quiz)
     else:
         col_f_in, col_f_out = st.columns([6, 6], gap="large")
         with col_f_in:
-            with st.container(border=True):
+            with st.container(border=True, key="card_feynman_in"):
                 st.markdown("#### Vấn đáp ngược Feynman (Teach-Back)")
                 st.caption(
                     "Đóng vai người giảng: tự giải thích lại khái niệm dưới đây bằng lời của chính bạn. "
@@ -1943,7 +2692,7 @@ def _render_tab_practice(dna: LearnerDNA) -> None:
 
         with col_f_out:
             ev = st.session_state.get("teach_back_eval")
-            with st.container(border=True):
+            with st.container(border=True, key="card_feynman_out"):
                 st.markdown("#### Kết quả chấm bản chất")
                 if not ev:
                     st.info("Chưa có bài nộp. Hãy chọn một khái niệm bên trái và giải thích bằng lời của bạn.")
@@ -1989,9 +2738,11 @@ def _render_tab_analytics(dna: LearnerDNA) -> None:
         conf_stats = db.get_confidence_stats(dna.learner_id, st.session_state.doc_id)
         st.markdown(render_confidence_matrix_html(conf_stats), unsafe_allow_html=True)
 
+    _render_progress_chart(dna)
+
     st.markdown('<p class="sc-section-eyebrow">Lộ trình ôn tập ưu tiên hôm nay</p>', unsafe_allow_html=True)
     for idx, item in enumerate(plan):
-        with st.container(border=True):
+        with st.container(border=True, key=f"card_plan_{idx}"):
             c1, c2, c3 = st.columns([6.5, 2.5, 3.0], vertical_alignment="center")
             with c1:
                 st.markdown(f"**{idx + 1}. [{item['priority_label']}] {item['concept']}** `{item['page_ref']}`")
@@ -2017,17 +2768,53 @@ def _render_tab_analytics(dna: LearnerDNA) -> None:
     c_misc, c_hist = st.columns([6, 6], gap="large")
     with c_misc:
         st.markdown('<p class="sc-section-eyebrow">Sổ tay Lỗi tư duy (SQLite)</p>', unsafe_allow_html=True)
-        with st.container(border=True):
+        with st.container(border=True, key="card_misc_log"):
             if not dna.active_misconceptions and not dna.resolved_misconceptions:
                 st.caption("Chưa có lỗi tư duy nào được ghi nhận cho hồ sơ này.")
             for m in dna.active_misconceptions:
                 st.markdown(render_misconception_card_html(m.topic, m.description, m.occurrences, False), unsafe_allow_html=True)
             for m in dna.resolved_misconceptions:
                 st.markdown(render_misconception_card_html(m.topic, m.description, m.occurrences, True), unsafe_allow_html=True)
+            if dna.active_misconceptions or dna.resolved_misconceptions:
+                doc_title = st.session_state.doc_title
+                cards = export.build_flashcards(dna, cmap, include_resolved=not dna.active_misconceptions)
+                st.caption("Tải về để ôn ngoài ứng dụng:")
+                ex1, ex2, ex3 = st.columns(3)
+                ex1.download_button(
+                    "Sổ tay (.md)",
+                    data=export.misconceptions_markdown(dna, doc_title, cmap),
+                    file_name=export.safe_filename(doc_title, "so-tay-loi-tu-duy.md"),
+                    mime="text/markdown",
+                    icon=":material/download:",
+                    key="btn_dl_misc_md",
+                    on_click="ignore",
+                    width="stretch",
+                )
+                ex2.download_button(
+                    "Flashcard (.csv)",
+                    data=export.flashcards_csv(cards).encode("utf-8-sig"),
+                    file_name=export.safe_filename(doc_title, "flashcard.csv"),
+                    mime="text/csv",
+                    icon=":material/style:",
+                    key="btn_dl_flash_csv",
+                    on_click="ignore",
+                    help="CSV 3 cột (mặt trước, mặt sau, thẻ) nhập được vào Anki hoặc Quizlet.",
+                    width="stretch",
+                )
+                ex3.download_button(
+                    "Flashcard (.md)",
+                    data=export.flashcards_markdown(cards, doc_title),
+                    file_name=export.safe_filename(doc_title, "flashcard.md"),
+                    mime="text/markdown",
+                    icon=":material/style:",
+                    key="btn_dl_flash_md",
+                    on_click="ignore",
+                    width="stretch",
+                )
 
     with c_hist:
         st.markdown('<p class="sc-section-eyebrow">Lịch sử làm bài gần nhất (SQLite)</p>', unsafe_allow_html=True)
-        with st.container(border=True):
+        with st.container(border=True, key="card_history"):
             attempts = db.recent_quiz_attempts(dna.learner_id, limit=8)
             if not attempts:
                 st.caption("Chưa có lượt nộp quiz nào được lưu.")
@@ -2049,11 +2836,12 @@ def _render_tab_analytics(dna: LearnerDNA) -> None:
     st.markdown('<p class="sc-section-eyebrow" style="margin-top:0.8rem;">Dashboard Kỹ thuật & Bộ đánh giá 20 câu (Giám khảo / Mentor)</p>', unsafe_allow_html=True)
     col_tel, col_ev = st.columns([6, 6], gap="large")
     with col_tel:
-        with st.container(border=True):
+        with st.container(border=True, key="card_telemetry"):
             st.markdown("#### Telemetry Token, Độ trễ & Chi phí")
+            st.caption("Số liệu toàn hệ thống (mọi người học dùng chung máy chủ này), không phải của riêng bạn.")
             tel = db.get_telemetry_summary(limit=8)
             m1, m2, m3 = st.columns(3)
-            m1.metric("Tổng lượt gọi", tel["total_calls"])
+            m1.metric("Lượt gọi AI (toàn hệ thống)", tel["total_calls"])
             m2.metric("Độ trễ TB", f"{tel['avg_latency_ms']:.0f} ms")
             m3.metric("Tổng chi phí", f"${tel['total_cost_usd']:.4f}")
             if tel["by_model"]:
@@ -2071,12 +2859,14 @@ def _render_tab_analytics(dna: LearnerDNA) -> None:
                 )
 
     def _eval_panel() -> None:
-        with st.container(border=True):
+        with st.container(border=True, key="card_eval"):
             st.markdown("#### Bộ 20 câu Eval chuẩn (`eval/questions.json`)")
             eval_path = config.BASE_DIR / "eval" / "results" / "latest_eval.json"
             if st.button("Chạy kiểm thử bộ 20 câu ngay", icon=":material/play_circle:", key="btn_run_eval_ui"):
                 from eval.run_eval import run_offline_eval
-                st.session_state.eval_summary = run_offline_eval()
+
+                # save=False: chỉ hiển thị, không ghi đè eval/results/latest_eval.json đang được git theo dõi.
+                st.session_state.eval_summary = run_offline_eval(save=False)
             ev_data = st.session_state.get("eval_summary")
             if ev_data is None and eval_path.exists():
                 try:
@@ -2117,7 +2907,7 @@ def _render_tab_analytics(dna: LearnerDNA) -> None:
                 st.caption("Bấm nút phía trên để chạy kiểm chứng trực tiếp bộ 20 câu hỏi đánh giá.")
 
     def _progress_panel() -> None:
-        with st.container(border=True):
+        with st.container(border=True, key="card_progress"):
             st.markdown("#### Thống kê tiến độ tài liệu của bạn")
             studied = [c for c in dna.concepts if c.attempts > 0]
             mastered = [c for c in dna.concepts if c.status == "mastered"]
@@ -2128,6 +2918,16 @@ def _render_tab_analytics(dna: LearnerDNA) -> None:
             p2.metric("Làm chủ", len(mastered))
             p3.metric("Tỉ lệ đúng", f"{(100 * total_ok / total_att):.0f}%" if total_att else "—")
             st.caption(f"Tài liệu: **{st.session_state.doc_title}** · {total_att} lượt làm bài đã ghi nhận.")
+
+    with st.container(border=True, key="card_my_activity"):
+        st.markdown("#### Hoạt động của bạn trên tài liệu này")
+        act = db.get_learner_activity_summary(dna.learner_id, st.session_state.doc_id)
+        fb = db.get_feedback_summary(dna.learner_id, st.session_state.doc_id)
+        a1, a2, a3, a4 = st.columns(4)
+        a1.metric("Câu đã hỏi Gia sư", act["coach_questions"])
+        a2.metric("Lượt nộp quiz / ôn tập", act["quiz_attempts"])
+        a3.metric("Chuỗi ngày học", f"{db.get_study_streak(dna.learner_id)['current']} ngày")
+        a4.metric("Đánh giá câu trả lời", f"{fb['up']} thích · {fb['down']} chưa tốt")
 
     with col_ev:
         if st.session_state.doc_id == db.DEFAULT_DOC_ID:
@@ -2162,7 +2962,6 @@ def main() -> None:
 def _main_body() -> None:
     _bootstrap_state()
     st.session_state.setdefault("chat_focus_mode", False)
-    st.session_state.setdefault("show_dashboard_strip", True)
     st.session_state.setdefault("logged_in_learner_id", "")
     st.session_state.setdefault("_logged_out", False)
     if not st.session_state["logged_in_learner_id"] and not st.session_state.get("_logged_out"):
@@ -2196,37 +2995,27 @@ def _main_body() -> None:
             f'<script>document.cookie = "sc_session={tok}; path=/; max-age=604800; SameSite=Lax";</script>',
             unsafe_allow_javascript=True,
         )
-    telemetry = db.get_telemetry_summary(limit=5)
-    in_focus = st.session_state.get("active_nav") == "coach" and bool(st.session_state.chat_focus_mode)
-
     dna = _current_dna()
     if not st.session_state.get("has_document") or st.session_state.get("kb") is None:
         _render_document_onboarding(dna)
         return
-    _render_header(dna)
     coverage = compute_coverage_stats(dna.concepts)
-    if not in_focus and st.session_state.show_dashboard_strip:
-        st.markdown(render_bento_strip_html(dna, coverage, telemetry), unsafe_allow_html=True)
-
-    cur_nav = st.session_state.get("active_nav") or "coach"
-    if cur_nav not in NAV_LABELS:
-        cur_nav = "coach"
-    nav_ver = st.session_state.get("_nav_ver", 0)
-    picked_nav = st.segmented_control(
-        "Điều hướng",
-        options=list(NAV_LABELS.keys()),
-        default=cur_nav,
-        format_func=lambda k: NAV_LABELS[k],
-        selection_mode="single",
-        key=f"nav_ctrl_{nav_ver}",
-        label_visibility="collapsed",
-        width="stretch",
-    )
-    active_nav = picked_nav or cur_nav
+    active_nav = _render_sidebar(dna, coverage) or "coach"
     st.session_state["active_nav"] = active_nav
 
+    head = PAGE_HEADS.get(active_nav)
+    if head:
+        st.markdown(render_page_head_html(*head), unsafe_allow_html=True)
+
     if active_nav == "map":
-        _render_tab_map(dna, coverage)
+        # Dải KPI chỉ hiện số liệu của chính người học (số lượt gọi AI toàn hệ thống nằm ở bảng kỹ thuật).
+        activity = db.get_learner_activity_summary(dna.learner_id, st.session_state.doc_id)
+        activity["streak_days"] = db.get_study_streak(dna.learner_id)["current"]
+        _render_tab_map(dna, coverage, activity)
+    elif active_nav == "review":
+        _render_tab_review(dna)
+    elif active_nav == "doc":
+        _render_tab_doc()
     elif active_nav == "lab":
         _render_tab_lab(dna)
     elif active_nav == "coach":

@@ -155,6 +155,26 @@ def init_db(db_path: str | Path | None = None) -> None:
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
 
+            CREATE TABLE IF NOT EXISTS conversations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                learner_id TEXT NOT NULL,
+                doc_id TEXT NOT NULL,
+                title TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS mastery_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                learner_id TEXT NOT NULL,
+                doc_id TEXT NOT NULL,
+                concept TEXT NOT NULL,
+                mastery_score REAL NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_mastery_history_learner
+                ON mastery_history (learner_id, doc_id, created_at);
+
             CREATE TABLE IF NOT EXISTS users (
                 username TEXT PRIMARY KEY,
                 display_name TEXT NOT NULL,
@@ -165,6 +185,8 @@ def init_db(db_path: str | Path | None = None) -> None:
             );
             """
         )
+
+        _migrate_chat_schema(conn)
 
         existing = conn.execute("SELECT COUNT(*) AS cnt FROM learners").fetchone()["cnt"]
         if existing == 0:
@@ -180,8 +202,38 @@ def init_db(db_path: str | Path | None = None) -> None:
         ).fetchall()
         for r in legacy_rows:
             lid = r["learner_id"]
-            for tbl in ("chat_messages", "learner_documents", "confidence_stats", "quiz_attempts", "misconceptions", "concept_mastery", "learners"):
+            for tbl in ("chat_messages", "conversations", "mastery_history", "learner_documents", "confidence_stats", "quiz_attempts", "misconceptions", "concept_mastery", "learners"):
                 conn.execute(f"DELETE FROM {tbl} WHERE learner_id = ?", (lid,))
+
+
+def _migrate_chat_schema(conn: sqlite3.Connection) -> None:
+    """Nâng cấp bảng chat_messages của DB cũ: thêm cột conversation_id / feedback và gom các tin nhắn
+    cũ (chưa thuộc cuộc trò chuyện nào) của mỗi cặp (người học, tài liệu) vào một cuộc trò chuyện.
+
+    Chạy lại nhiều lần không đổi dữ liệu (idempotent); không xóa tin nhắn nào."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(chat_messages)").fetchall()}
+    if "conversation_id" not in cols:
+        conn.execute("ALTER TABLE chat_messages ADD COLUMN conversation_id INTEGER")
+    if "feedback" not in cols:
+        conn.execute("ALTER TABLE chat_messages ADD COLUMN feedback INTEGER NOT NULL DEFAULT 0")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_chat_messages_conv ON chat_messages (conversation_id, id)")
+    orphans = conn.execute(
+        """
+        SELECT learner_id, doc_id, MIN(created_at) AS first_at, MAX(created_at) AS last_at
+        FROM chat_messages WHERE conversation_id IS NULL
+        GROUP BY learner_id, doc_id
+        """
+    ).fetchall()
+    for r in orphans:
+        now = _now_iso()
+        cur = conn.execute(
+            "INSERT INTO conversations (learner_id, doc_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            (r["learner_id"], r["doc_id"], "Cuộc trò chuyện trước đây", r["first_at"] or now, r["last_at"] or now),
+        )
+        conn.execute(
+            "UPDATE chat_messages SET conversation_id = ? WHERE learner_id = ? AND doc_id = ? AND conversation_id IS NULL",
+            (cur.lastrowid, r["learner_id"], r["doc_id"]),
+        )
 
 
 def _seed_default_learners(conn: sqlite3.Connection) -> None:
@@ -773,6 +825,11 @@ def update_concept_mastery(
             """,
             (learner_id, doc_id, concept, round(new_score, 1), new_bloom, attempts, correct, now, next_due),
         )
+        # Lịch sử điểm theo thời gian (phục vụ biểu đồ tiến bộ theo ngày).
+        conn.execute(
+            "INSERT INTO mastery_history (learner_id, doc_id, concept, mastery_score, created_at) VALUES (?, ?, ?, ?, ?)",
+            (learner_id, doc_id, concept, round(new_score, 1), now),
+        )
 
         _sync_learner_level_conn(conn, learner_id, doc_id, now, total_concepts=total_concepts)
 
@@ -1005,11 +1062,13 @@ def reset_learner_profile(
             conn.execute("DELETE FROM misconceptions WHERE learner_id = ? AND doc_id = ?", (learner_id, doc_id))
             conn.execute("DELETE FROM quiz_attempts WHERE learner_id = ? AND doc_id = ?", (learner_id, doc_id))
             conn.execute("DELETE FROM confidence_stats WHERE learner_id = ? AND doc_id = ?", (learner_id, doc_id))
+            conn.execute("DELETE FROM mastery_history WHERE learner_id = ? AND doc_id = ?", (learner_id, doc_id))
         else:
             conn.execute("DELETE FROM concept_mastery WHERE learner_id = ?", (learner_id,))
             conn.execute("DELETE FROM misconceptions WHERE learner_id = ?", (learner_id,))
             conn.execute("DELETE FROM quiz_attempts WHERE learner_id = ?", (learner_id,))
             conn.execute("DELETE FROM confidence_stats WHERE learner_id = ?", (learner_id,))
+            conn.execute("DELETE FROM mastery_history WHERE learner_id = ?", (learner_id,))
         conn.execute(
             "UPDATE learners SET overall_level = ?, updated_at = ? WHERE learner_id = ?",
             ("Nâng cao" if learner_id == "senior_demo" else "Mới bắt đầu", now, learner_id),
@@ -1151,15 +1210,235 @@ def load_learner_document(
     }
 
 
+def _local_day(ts: str) -> str:
+    """Đổi mốc thời gian UTC lưu trong DB sang ngày theo giờ máy (YYYY-MM-DD)."""
+    try:
+        dt = datetime.strptime(ts[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return ""
+    return dt.astimezone().strftime("%Y-%m-%d")
+
+
+def _today_local() -> str:
+    return datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d")
+
+
+def get_mastery_timeline(
+    learner_id: str,
+    doc_id: str = DEFAULT_DOC_ID,
+    db_path: str | Path | None = None,
+) -> list[dict]:
+    """Điểm thành thạo theo từng ngày: mỗi phần tử {"day", "overall", "concepts": {tên: điểm}}.
+
+    Điểm của một khái niệm trong ngày là lần ghi cuối cùng của ngày đó, và được giữ nguyên sang các
+    ngày sau cho tới khi có lần ghi mới. "overall" là trung bình các khái niệm đã từng được chấm."""
+    init_db(db_path)
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT concept, mastery_score, created_at FROM mastery_history
+            WHERE learner_id = ? AND doc_id = ? ORDER BY id
+            """,
+            (learner_id, doc_id),
+        ).fetchall()
+    latest: dict[str, float] = {}
+    by_day: dict[str, dict[str, float]] = {}
+    for r in rows:
+        day = _local_day(r["created_at"])
+        if not day:
+            continue
+        latest[r["concept"]] = float(r["mastery_score"])
+        by_day[day] = dict(latest)
+    out: list[dict] = []
+    for day in sorted(by_day):
+        snap = by_day[day]
+        out.append(
+            {
+                "day": day,
+                "overall": round(sum(snap.values()) / len(snap), 1) if snap else 0.0,
+                "concepts": snap,
+            }
+        )
+    return out
+
+
+def get_study_streak(
+    learner_id: str,
+    db_path: str | Path | None = None,
+    today: str | None = None,
+) -> dict:
+    """Chuỗi ngày học liên tục của một người học (tính trên mọi tài liệu).
+
+    Một ngày được tính là "có học" khi có lượt nộp quiz hoặc có lần cập nhật điểm thành thạo.
+    Trả {"current", "longest", "studied_today", "days"}; chuỗi hiện tại vẫn giữ nếu hôm qua có học
+    mà hôm nay chưa học (để người học còn cơ hội nối chuỗi)."""
+    init_db(db_path)
+    with _connect(db_path) as conn:
+        stamps = [
+            r[0]
+            for r in conn.execute(
+                """
+                SELECT created_at FROM quiz_attempts WHERE learner_id = ?
+                UNION ALL
+                SELECT created_at FROM mastery_history WHERE learner_id = ?
+                """,
+                (learner_id, learner_id),
+            ).fetchall()
+        ]
+    days = sorted({d for d in (_local_day(s) for s in stamps) if d})
+    today_s = today or _today_local()
+    if not days:
+        return {"current": 0, "longest": 0, "studied_today": False, "days": []}
+
+    def _d(s: str) -> datetime:
+        return datetime.strptime(s, "%Y-%m-%d")
+
+    longest = run = 1
+    for prev, cur in zip(days, days[1:]):
+        run = run + 1 if (_d(cur) - _d(prev)).days == 1 else 1
+        longest = max(longest, run)
+    day_set = set(days)
+    studied_today = today_s in day_set
+    cursor = _d(today_s) if studied_today else _d(today_s) - timedelta(days=1)
+    current = 0
+    while cursor.strftime("%Y-%m-%d") in day_set:
+        current += 1
+        cursor -= timedelta(days=1)
+    return {"current": current, "longest": max(longest, current), "studied_today": studied_today, "days": days}
+
+
+def get_learner_activity_summary(
+    learner_id: str,
+    doc_id: str | None = None,
+    db_path: str | Path | None = None,
+) -> dict:
+    """Số liệu hoạt động của RIÊNG một người học (khác get_telemetry_summary là số liệu toàn hệ thống)."""
+    init_db(db_path)
+    with _connect(db_path) as conn:
+        if doc_id:
+            quiz_row = conn.execute(
+                "SELECT COUNT(*) AS n, COALESCE(SUM(total), 0) AS q FROM quiz_attempts WHERE learner_id = ? AND doc_id = ?",
+                (learner_id, doc_id),
+            ).fetchone()
+            chat_row = conn.execute(
+                "SELECT COUNT(*) AS n FROM chat_messages WHERE learner_id = ? AND doc_id = ? AND role = 'user'",
+                (learner_id, doc_id),
+            ).fetchone()
+        else:
+            quiz_row = conn.execute(
+                "SELECT COUNT(*) AS n, COALESCE(SUM(total), 0) AS q FROM quiz_attempts WHERE learner_id = ?",
+                (learner_id,),
+            ).fetchone()
+            chat_row = conn.execute(
+                "SELECT COUNT(*) AS n FROM chat_messages WHERE learner_id = ? AND role = 'user'",
+                (learner_id,),
+            ).fetchone()
+    return {
+        "quiz_attempts": int(quiz_row["n"]),
+        "quiz_questions": int(quiz_row["q"]),
+        "coach_questions": int(chat_row["n"]),
+    }
+
+
+# ---------- Hội thoại với Gia sư: nhiều cuộc trò chuyện trên mỗi tài liệu ----------
+def create_conversation(
+    learner_id: str,
+    doc_id: str,
+    title: str = "",
+    db_path: str | Path | None = None,
+) -> int:
+    """Tạo một cuộc trò chuyện mới và trả về id."""
+    init_db(db_path)
+    now = _now_iso()
+    with _connect(db_path) as conn:
+        cur = conn.execute(
+            "INSERT INTO conversations (learner_id, doc_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            (learner_id, doc_id, (title or "").strip()[:80], now, now),
+        )
+        return int(cur.lastrowid)
+
+
+def list_conversations(
+    learner_id: str,
+    doc_id: str,
+    db_path: str | Path | None = None,
+) -> list[dict]:
+    """Các cuộc trò chuyện của người học trên một tài liệu, mới dùng gần nhất đứng trước."""
+    init_db(db_path)
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT c.id, c.title, c.created_at, c.updated_at,
+                   (SELECT COUNT(*) FROM chat_messages m WHERE m.conversation_id = c.id) AS message_count
+            FROM conversations c
+            WHERE c.learner_id = ? AND c.doc_id = ?
+            ORDER BY c.updated_at DESC, c.id DESC
+            """,
+            (learner_id, doc_id),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def rename_conversation(
+    learner_id: str,
+    conversation_id: int,
+    title: str,
+    db_path: str | Path | None = None,
+) -> bool:
+    clean = (title or "").strip()[:80]
+    if not clean:
+        return False
+    init_db(db_path)
+    with _connect(db_path) as conn:
+        cur = conn.execute(
+            "UPDATE conversations SET title = ? WHERE id = ? AND learner_id = ?",
+            (clean, int(conversation_id), learner_id),
+        )
+        return cur.rowcount > 0
+
+
+def delete_conversation(
+    learner_id: str,
+    conversation_id: int,
+    db_path: str | Path | None = None,
+) -> bool:
+    """Xóa một cuộc trò chuyện cùng toàn bộ tin nhắn của nó (chỉ khi thuộc đúng người học)."""
+    init_db(db_path)
+    with _connect(db_path) as conn:
+        cur = conn.execute(
+            "DELETE FROM conversations WHERE id = ? AND learner_id = ?",
+            (int(conversation_id), learner_id),
+        )
+        if cur.rowcount == 0:
+            return False
+        conn.execute(
+            "DELETE FROM chat_messages WHERE conversation_id = ? AND learner_id = ?",
+            (int(conversation_id), learner_id),
+        )
+        return True
+
+
+def _latest_conversation_id(conn: sqlite3.Connection, learner_id: str, doc_id: str) -> int | None:
+    row = conn.execute(
+        "SELECT id FROM conversations WHERE learner_id = ? AND doc_id = ? ORDER BY updated_at DESC, id DESC LIMIT 1",
+        (learner_id, doc_id),
+    ).fetchone()
+    return int(row["id"]) if row else None
+
+
 def append_chat_message(
     learner_id: str,
     doc_id: str,
     role: str,
     content: str,
     turn: CoachTurnResult | dict | None = None,
+    conversation_id: int | None = None,
     db_path: str | Path | None = None,
-) -> None:
-    """Ghi một lượt hội thoại của chatbot; kèm JSON của CoachTurnResult khi có."""
+) -> int:
+    """Ghi một lượt hội thoại của chatbot (kèm JSON CoachTurnResult khi có) và trả về id tin nhắn.
+
+    Không truyền conversation_id thì ghi vào cuộc trò chuyện gần nhất của (người học, tài liệu),
+    tự tạo mới nếu chưa có. Tin nhắn đầu tiên của người học được dùng làm tiêu đề cuộc trò chuyện."""
     init_db(db_path)
     turn_json = ""
     if turn is not None:
@@ -1167,34 +1446,72 @@ def append_chat_message(
             turn_json = turn.model_dump_json()
         else:
             turn_json = json.dumps(turn, ensure_ascii=False)
+    now = _now_iso()
     with _connect(db_path) as conn:
-        conn.execute(
+        conv_id = conversation_id
+        if conv_id is not None:
+            owned = conn.execute(
+                "SELECT 1 FROM conversations WHERE id = ? AND learner_id = ? AND doc_id = ?",
+                (int(conv_id), learner_id, doc_id),
+            ).fetchone()
+            if owned is None:
+                conv_id = None
+        if conv_id is None:
+            conv_id = _latest_conversation_id(conn, learner_id, doc_id)
+        if conv_id is None:
+            conv_id = conn.execute(
+                "INSERT INTO conversations (learner_id, doc_id, title, created_at, updated_at) VALUES (?, ?, '', ?, ?)",
+                (learner_id, doc_id, now, now),
+            ).lastrowid
+        cur = conn.execute(
             """
-            INSERT INTO chat_messages (learner_id, doc_id, role, content, turn_json, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO chat_messages (learner_id, doc_id, role, content, turn_json, created_at, conversation_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (learner_id, doc_id, role, content, turn_json, _now_iso()),
+            (learner_id, doc_id, role, content, turn_json, now, int(conv_id)),
         )
+        conn.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (now, int(conv_id)))
+        if role == "user":
+            snippet = " ".join((content or "").split())[:60]
+            conn.execute(
+                "UPDATE conversations SET title = ? WHERE id = ? AND title = ''",
+                (snippet, int(conv_id)),
+            )
+        return int(cur.lastrowid)
 
 
 def load_chat_history(
     learner_id: str,
     doc_id: str,
     limit: int = 40,
+    conversation_id: int | None = None,
     db_path: str | Path | None = None,
 ) -> list[dict]:
-    """Lịch sử hội thoại theo thứ tự thời gian tăng dần (cũ → mới), tối đa `limit` lượt gần nhất."""
+    """Lịch sử hội thoại theo thứ tự thời gian tăng dần (cũ → mới), tối đa `limit` lượt gần nhất.
+
+    Truyền conversation_id để chỉ lấy một cuộc trò chuyện; bỏ trống thì lấy mọi tin nhắn của tài liệu."""
     init_db(db_path)
     with _connect(db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT id, role, content, turn_json, created_at
-            FROM chat_messages
-            WHERE learner_id = ? AND doc_id = ?
-            ORDER BY id DESC LIMIT ?
-            """,
-            (learner_id, doc_id, limit),
-        ).fetchall()
+        if conversation_id is None:
+            rows = conn.execute(
+                """
+                SELECT id, role, content, turn_json, created_at, conversation_id, feedback
+                FROM chat_messages
+                WHERE learner_id = ? AND doc_id = ?
+                ORDER BY id DESC LIMIT ?
+                """,
+                (learner_id, doc_id, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT id, role, content, turn_json, created_at, conversation_id, feedback
+                FROM chat_messages
+                WHERE learner_id = ? AND doc_id = ? AND conversation_id = ?
+                ORDER BY id DESC LIMIT ?
+                """,
+                (learner_id, doc_id, int(conversation_id), limit),
+            ).fetchall()
     out: list[dict] = []
     for r in reversed(rows):
         item = dict(r)
@@ -1206,8 +1523,63 @@ def load_chat_history(
             except ValueError:
                 turn = None
         item["turn"] = turn
+        item["feedback"] = int(item.get("feedback") or 0)
         out.append(item)
     return out
+
+
+def set_message_feedback(
+    learner_id: str,
+    message_id: int,
+    value: int,
+    db_path: str | Path | None = None,
+) -> bool:
+    """Lưu đánh giá câu trả lời của Gia sư: 1 = hữu ích, -1 = chưa tốt, 0 = bỏ đánh giá."""
+    val = 1 if value > 0 else (-1 if value < 0 else 0)
+    init_db(db_path)
+    with _connect(db_path) as conn:
+        cur = conn.execute(
+            "UPDATE chat_messages SET feedback = ? WHERE id = ? AND learner_id = ? AND role = 'assistant'",
+            (val, int(message_id), learner_id),
+        )
+        return cur.rowcount > 0
+
+
+def get_feedback_summary(
+    learner_id: str,
+    doc_id: str | None = None,
+    db_path: str | Path | None = None,
+) -> dict:
+    """Đếm số câu trả lời của Gia sư được đánh giá hữu ích / chưa tốt / chưa đánh giá."""
+    init_db(db_path)
+    sql = "SELECT feedback, COUNT(*) AS n FROM chat_messages WHERE learner_id = ? AND role = 'assistant'"
+    args: list = [learner_id]
+    if doc_id:
+        sql += " AND doc_id = ?"
+        args.append(doc_id)
+    with _connect(db_path) as conn:
+        rows = conn.execute(sql + " GROUP BY feedback", args).fetchall()
+    counts = {int(r["feedback"] or 0): int(r["n"]) for r in rows}
+    return {"up": counts.get(1, 0), "down": counts.get(-1, 0), "unrated": counts.get(0, 0)}
+
+
+def delete_chat_messages(
+    learner_id: str,
+    message_ids: list[int],
+    db_path: str | Path | None = None,
+) -> int:
+    """Xóa các tin nhắn theo id (dùng khi "Trả lời lại": bỏ cặp hỏi–đáp cuối rồi sinh lại)."""
+    ids = [int(i) for i in message_ids if i]
+    if not ids:
+        return 0
+    init_db(db_path)
+    marks = ", ".join("?" for _ in ids)
+    with _connect(db_path) as conn:
+        cur = conn.execute(
+            f"DELETE FROM chat_messages WHERE learner_id = ? AND id IN ({marks})",
+            (learner_id, *ids),
+        )
+        return cur.rowcount
 
 
 def clear_chat_history(
@@ -1215,10 +1587,14 @@ def clear_chat_history(
     doc_id: str,
     db_path: str | Path | None = None,
 ) -> None:
-    """Xóa toàn bộ lịch sử hội thoại của một người học trên một tài liệu."""
+    """Xóa toàn bộ lịch sử hội thoại (mọi cuộc trò chuyện) của một người học trên một tài liệu."""
     init_db(db_path)
     with _connect(db_path) as conn:
         conn.execute(
             "DELETE FROM chat_messages WHERE learner_id = ? AND doc_id = ?",
+            (learner_id, doc_id),
+        )
+        conn.execute(
+            "DELETE FROM conversations WHERE learner_id = ? AND doc_id = ?",
             (learner_id, doc_id),
         )

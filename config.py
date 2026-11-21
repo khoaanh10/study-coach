@@ -56,7 +56,6 @@ MODEL_PRICING_PER_1M: dict[str, tuple[float, float]] = {
 }
 
 _RUNTIME_API_KEY: str | None = None
-_RUNTIME_BASE_URL: str | None = None
 
 
 def set_runtime_api_key(key: str | None) -> None:
@@ -64,13 +63,6 @@ def set_runtime_api_key(key: str | None) -> None:
     global _RUNTIME_API_KEY
     cleaned = (key or "").strip()
     _RUNTIME_API_KEY = cleaned or None
-
-
-def set_runtime_base_url(base_url: str | None) -> None:
-    """Cho phép chỉnh OPENAI_BASE_URL trong phiên chạy nếu cần."""
-    global _RUNTIME_BASE_URL
-    cleaned = (base_url or "").strip()
-    _RUNTIME_BASE_URL = cleaned or None
 
 
 def get_effective_api_key() -> str:
@@ -81,9 +73,47 @@ def get_effective_api_key() -> str:
 
 
 def get_effective_base_url() -> str:
-    if _RUNTIME_BASE_URL is not None:
-        return _RUNTIME_BASE_URL
+    """Base URL chỉ lấy từ môi trường (.env / biến môi trường), không cho đổi từ giao diện:
+    cấu hình là biến toàn tiến trình nên đổi ở một phiên sẽ kéo request của mọi phiên (kèm API key) sang URL đó."""
     return OPENAI_BASE_URL.strip()
+
+
+_SESSION_SECRET_CACHE: dict[str, bytes] = {}
+
+
+def get_session_secret() -> bytes:
+    """Khóa ký cookie phiên đăng nhập.
+
+    Ưu tiên biến môi trường SESSION_SECRET. Nếu chưa đặt, sinh ngẫu nhiên một khóa và lưu vào
+    file `.session_secret` cạnh file SQLite (thư mục data/ đã nằm trong .gitignore) để phiên
+    đăng nhập vẫn hợp lệ sau khi khởi động lại app.
+    """
+    env_val = _get_setting("SESSION_SECRET")
+    if env_val:
+        return env_val.encode("utf-8")
+    secret_path = Path(DB_PATH).resolve().parent / ".session_secret"
+    cache_key = str(secret_path)
+    cached = _SESSION_SECRET_CACHE.get(cache_key)
+    if cached:
+        return cached
+    secret = b""
+    try:
+        if secret_path.exists():
+            secret = secret_path.read_text(encoding="utf-8").strip().encode("utf-8")
+        if len(secret) < 32:
+            import secrets as _secrets
+
+            secret = _secrets.token_hex(32).encode("utf-8")
+            secret_path.parent.mkdir(parents=True, exist_ok=True)
+            secret_path.write_text(secret.decode("utf-8"), encoding="utf-8")
+    except OSError:
+        # Không ghi được đĩa: vẫn dùng khóa ngẫu nhiên trong bộ nhớ (cookie hết hiệu lực khi khởi động lại).
+        if len(secret) < 32:
+            import secrets as _secrets
+
+            secret = _secrets.token_hex(32).encode("utf-8")
+    _SESSION_SECRET_CACHE[cache_key] = secret
+    return secret
 
 
 def has_live_api_key() -> bool:

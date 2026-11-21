@@ -14,6 +14,11 @@ class Question(BaseModel):
     page_ref: str = ""
     # Chẩn đoán lỗi tư duy ứng với từng lựa chọn (đủ 4 phần tử A..D; đáp án đúng ghi "Chính xác").
     option_diagnostics: list[str] = Field(default_factory=list)
+    # Dạng câu hỏi: mcq (trắc nghiệm) | fill_blank (điền vào chỗ trống) | short_answer (tự luận ngắn).
+    qtype: str = "mcq"
+    # fill_blank: câu trích có chỗ trống "_____"; answer_text: đáp án mẫu cho câu dạng mở.
+    blank_prompt: str = ""
+    answer_text: str = ""
 
 
 class Quiz(BaseModel):
@@ -34,6 +39,10 @@ class GradedQuestion(BaseModel):
     diagnosed_misconception: str = ""
     confidence: str = "Bình thường"
     calibration_tag: str = ""
+    qtype: str = "mcq"
+    learner_text: str = ""  # câu trả lời tự gõ (dạng điền chỗ trống / tự luận)
+    expected_text: str = ""  # đáp án mẫu của câu dạng mở
+    grader_feedback: str = ""  # nhận xét của người chấm (LLM hoặc bộ chấm offline)
 
 
 class QuizResult(BaseModel):

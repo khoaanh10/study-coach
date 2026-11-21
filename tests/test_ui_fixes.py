@@ -67,20 +67,6 @@ def _all_text(at: AppTest) -> str:
     return " ".join(str(e.value) for e in at.error)
 
 
-# ---------- Lỗi 1: dán key không làm sập app ----------
-def test_runtime_key_paste_does_not_crash(make_app):
-    at = make_app()
-    assert config.has_live_api_key() is False
-
-    at.text_input("runtime_key_input").set_value("sk-test").run()
-    assert not at.exception
-    assert config.get_effective_api_key() == "sk-test"
-
-    at.text_input("runtime_key_input").set_value("").run()
-    assert not at.exception
-    assert config.has_live_api_key() is False
-
-
 # ---------- Lỗi 2: độ khó ghi đúng vào lịch sử ----------
 def test_quiz_difficulty_recorded_in_history(make_app):
     at = make_app()

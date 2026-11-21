@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import html
+import re
+from pathlib import Path
 
 from core.contracts import (
     CoachTurnResult,
@@ -52,1068 +54,27 @@ def icon_svg(name: str, size: int = 16) -> str:
     )
 
 
+_CSS_PATH = Path(__file__).with_name("ui_theme.css")
+_FONT_LINKS = (
+    '<link rel="preconnect" href="https://fonts.googleapis.com">'
+    '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+    '<link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700'
+    '&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">'
+)
+
+
 def inject_theme_css() -> str:
-    """Trả về chuỗi <style> hoàn chỉnh với design tokens chuẩn UI/UX Pro Max."""
-    return clean_html(
-        """
-        <link rel="preconnect" href="https://fonts.googleapis.com">
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-        <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Newsreader:opsz,wght@6..72,600;6..72,700&display=swap" rel="stylesheet">
-        <style>
-        :root {
-            --bg-canvas: #f3f9f6;
-            --bg-gradient: linear-gradient(180deg, #eef7f2 0%, #f7fbf9 58%, #f3f9f6 100%);
-            --bg-surface: #FFFFFF;
-            --bg-subtle: #EDF6F0;
-            --bg-mint: #e6f4ec;
-            --border: #cfe3d7;
-            --border-strong: #b8d8c6;
-            --ink: #10241a;
-            --ink-secondary: #2f4638;
-            --ink-muted: #5b7263;
-            --brand: #166534;
-            --brand-deep: #1b5e3c;
-            --brand-hover: #14532d;
-            --brand-soft: #e6f4ec;
-            --brand-line: #cfe3d7;
-            --card-shadow: 0 2px 10px rgba(22, 101, 52, 0.05);
-            --card-shadow-hover: 0 6px 18px rgba(22, 101, 52, 0.10);
-            --citation: #1D4ED8;
-            --citation-soft: #EFF6FF;
-            --mastered-fg: #15803d;
-            --mastered-bg: #ECFDF5;
-            --mastered-bd: #A7F3D0;
-            --learning-fg: #B45309;
-            --learning-bg: #FFFBEB;
-            --learning-bd: #FDE68A;
-            --misconception-fg: #B91C1C;
-            --misconception-bg: #FEF2F2;
-            --misconception-bd: #FECACA;
-            --unseen-fg: #475569;
-            --unseen-bg: #F1F5F9;
-            --unseen-bd: #CBD5E1;
-            --radius-md: 14px;
-            --radius-lg: 18px;
-        }
-        html, body, [class*="css"] {
-            font-family: "Be Vietnam Pro", system-ui, -apple-system, sans-serif;
-            color: var(--ink);
-            line-height: 1.55;
-            -webkit-font-smoothing: antialiased;
-        }
-        .stApp {
-            background: var(--bg-gradient);
-            background-attachment: fixed;
-            min-height: 100vh;
-        }
-        .block-container {
-            max-width: 100% !important;
-            width: 100% !important;
-            padding: 2.8rem 2rem 1.2rem 2rem !important;
-        }
-        [data-stale="true"],
-        div[data-stale="true"],
-        .stElementContainer[data-stale="true"],
-        div[data-testid="stAppViewBlockContainer"] [data-stale="true"] {
-            opacity: 1 !important;
-            filter: none !important;
-            transition: none !important;
-        }
-        section[data-testid="stSidebar"],
-        div[data-testid="stSidebarCollapsedControl"],
-        button[data-testid="stExpandSidebarButton"],
-        .stAppDeployButton,
-        #MainMenu, footer {
-            display: none !important;
-        }
-        header[data-testid="stHeader"] {
-            background: transparent;
-            height: 2rem;
-        }
-        /* Touch target >= 44px & clear focus rings */
-        .stButton > button, .stPopover > button {
-            min-height: 2.6rem;
-            border-radius: 12px !important;
-            font-weight: 600 !important;
-            border: 1px solid var(--border) !important;
-            background: var(--bg-surface) !important;
-            color: var(--ink-secondary) !important;
-            box-shadow: none !important;
-            transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, box-shadow 160ms ease;
-        }
-        .stButton > button:hover, .stPopover > button:hover {
-            background: var(--brand-soft) !important;
-            border-color: var(--brand-line) !important;
-            color: var(--brand-hover) !important;
-        }
-        .stButton > button[kind="primary"],
-        .stButton > button[data-testid="stBaseButton-primary"] {
-            background: var(--brand) !important;
-            border-color: var(--brand) !important;
-            color: #FFFFFF !important;
-        }
-        .stButton > button[kind="primary"] *,
-        .stButton > button[data-testid="stBaseButton-primary"] *,
-        div[data-testid="stChatMessage"] button[data-testid="stBaseButton-primary"] *,
-        div[data-testid="stChatMessage"] button[kind="primary"] * {
-            color: #FFFFFF !important;
-        }
-        .stButton > button[kind="primary"]:hover,
-        .stButton > button[data-testid="stBaseButton-primary"]:hover {
-            background: var(--brand-hover) !important;
-            border-color: var(--brand-hover) !important;
-            box-shadow: 0 4px 12px rgba(22, 101, 52, 0.18) !important;
-        }
-        .stButton > button:focus-visible, .stPopover > button:focus-visible {
-            outline: 2px solid var(--brand) !important;
-            outline-offset: 2px !important;
-        }
-        div[data-testid="stSegmentedControl"] {
-            margin: 0.3rem 0 0.7rem 0;
-        }
-        div[data-testid="stSegmentedControl"] button {
-            min-height: 2.7rem !important;
-            font-weight: 600 !important;
-            font-size: 0.92rem !important;
-        }
-        /* Containers / expanders dùng ngôn ngữ card sạch */
-        div[data-testid="stVerticalBlockBorderWrapper"] {
-            border-radius: var(--radius-md) !important;
-            border-color: var(--border) !important;
-            background: var(--bg-surface);
-            box-shadow: var(--card-shadow);
-        }
-        div[data-testid="stExpander"] details {
-            border: 1px solid var(--border) !important;
-            border-radius: 12px !important;
-            background: var(--bg-surface);
-        }
-        div[data-testid="stExpander"] summary {
-            font-weight: 600;
-            color: var(--brand-deep);
-        }
-        div[data-testid="stAlert"] {
-            border-radius: 12px;
-            border: 1px solid var(--border);
-            background: var(--brand-soft);
-            color: var(--brand-deep);
-        }
-        @media (prefers-reduced-motion: reduce) {
-            *, *::before, *::after {
-                transition: none !important;
-                animation: none !important;
-            }
-        }
-        /* Masthead — compact botanical header */
-        .sc-masthead {
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: space-between;
-            align-items: center;
-            gap: 0.75rem;
-            padding: 0.7rem 1rem;
-            border: 1px solid var(--brand-line);
-            border-radius: var(--radius-lg);
-            background: linear-gradient(135deg, #ffffff 0%, #f2faf5 100%);
-            box-shadow: var(--card-shadow);
-            margin-bottom: 0.7rem;
-        }
-        .sc-brand-row {
-            display: flex;
-            align-items: center;
-            gap: 0.7rem;
-        }
-        .sc-logo-box {
-            width: 38px;
-            height: 38px;
-            border-radius: 12px;
-            background: linear-gradient(160deg, #1b5e3c 0%, #166534 100%);
-            color: #FFFFFF;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            flex: none;
-            box-shadow: 0 2px 8px rgba(22, 101, 52, 0.22);
-        }
-        .sc-kicker {
-            font-size: 0.68rem;
-            font-weight: 600;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
-            color: var(--brand);
-        }
-        .sc-title {
-            font-family: "Newsreader", Georgia, serif;
-            font-size: 1.5rem;
-            font-weight: 700;
-            line-height: 1.1;
-            color: var(--brand-deep);
-            margin: 0.04rem 0 0.08rem 0;
-        }
-        .sc-subtitle {
-            font-size: 0.82rem;
-            color: var(--ink-muted);
-            margin: 0;
-            line-height: 1.4;
-        }
-        .sc-badges {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            gap: 0.45rem;
-        }
-        .sc-pill {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.38rem;
-            padding: 0.32rem 0.72rem;
-            border-radius: 999px;
-            font-size: 0.78rem;
-            font-weight: 600;
-            border: 1px solid var(--border);
-            background: var(--bg-surface);
-            color: var(--ink-secondary);
-        }
-        .sc-pill.live {
-            background: var(--mastered-bg);
-            border-color: var(--mastered-bd);
-            color: var(--mastered-fg);
-        }
-        .sc-pill.demo {
-            background: var(--citation-soft);
-            border-color: #BFDBFE;
-            color: var(--citation);
-        }
-        /* Bento Summary Grid — compact horizontal KPI strip */
-        .sc-bento-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-            gap: 0.65rem;
-            margin: 0.25rem 0 0.7rem 0;
-        }
-        @media (max-width: 960px) {
-            .sc-bento-grid {
-                grid-template-columns: repeat(2, minmax(0, 1fr));
-            }
-            .block-container {
-                padding: 0.9rem 0.9rem 1.4rem 0.9rem !important;
-            }
-        }
-        .sc-bento-card {
-            background: var(--bg-surface);
-            border: 1px solid var(--border);
-            border-radius: var(--radius-md);
-            padding: 0.62rem 0.85rem;
-            display: flex;
-            flex-direction: column;
-            gap: 0.15rem;
-            box-shadow: var(--card-shadow);
-            transition: box-shadow 160ms ease, border-color 160ms ease, transform 160ms ease;
-        }
-        .sc-bento-card:hover {
-            box-shadow: var(--card-shadow-hover);
-            border-color: var(--brand-line);
-        }
-        .sc-bento-card.accent {
-            border-left: 3px solid var(--brand);
-        }
-        .sc-bento-card.alert {
-            border-left: 3px solid var(--misconception-fg);
-        }
-        .sc-bento-label {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.34rem;
-            font-size: 0.72rem;
-            font-weight: 600;
-            color: var(--ink-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-        }
-        .sc-bento-value {
-            font-family: "Newsreader", Georgia, serif;
-            font-size: 1.34rem;
-            font-weight: 700;
-            color: var(--brand-deep);
-            line-height: 1.15;
-        }
-        .sc-bento-meta {
-            font-size: 0.76rem;
-            color: var(--ink-secondary);
-            line-height: 1.35;
-        }
-        /* Concept Heatmap Cards */
-        .sc-concept-card {
-            background: var(--bg-surface);
-            border: 1px solid var(--border);
-            border-radius: var(--radius-md);
-            padding: 0.85rem 1rem;
-            margin-bottom: 0.55rem;
-            box-shadow: var(--card-shadow);
-            transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
-        }
-        .sc-concept-card:hover {
-            border-color: var(--brand-line);
-            box-shadow: var(--card-shadow-hover);
-            transform: translateY(-1px);
-        }
-        .sc-concept-card.st-misconception {
-            border-left: 4px solid var(--misconception-fg);
-        }
-        .sc-concept-card.st-mastered {
-            border-left: 4px solid var(--mastered-fg);
-        }
-        .sc-concept-card.st-learning {
-            border-left: 4px solid var(--learning-fg);
-        }
-        .sc-concept-card.st-unseen {
-            border-left: 4px solid var(--unseen-fg);
-        }
-        .sc-card-top {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            gap: 0.6rem;
-            margin-bottom: 0.45rem;
-        }
-        .sc-card-title {
-            font-size: 1.02rem;
-            font-weight: 700;
-            color: var(--ink);
-            margin: 0;
-        }
-        .sc-status-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.32rem;
-            padding: 0.22rem 0.6rem;
-            border-radius: 999px;
-            font-size: 0.76rem;
-            font-weight: 600;
-            white-space: nowrap;
-            border: 1px solid transparent;
-        }
-        .sc-status-badge.mastered {
-            color: var(--mastered-fg);
-            background: var(--mastered-bg);
-            border-color: var(--mastered-bd);
-        }
-        .sc-status-badge.learning {
-            color: var(--learning-fg);
-            background: var(--learning-bg);
-            border-color: var(--learning-bd);
-        }
-        .sc-status-badge.misconception {
-            color: var(--misconception-fg);
-            background: var(--misconception-bg);
-            border-color: var(--misconception-bd);
-        }
-        .sc-status-badge.unseen {
-            color: var(--unseen-fg);
-            background: var(--unseen-bg);
-            border-color: var(--unseen-bd);
-        }
-        .sc-progress-track {
-            width: 100%;
-            height: 7px;
-            border-radius: 999px;
-            background: var(--bg-subtle);
-            overflow: hidden;
-            margin: 0.45rem 0;
-        }
-        .sc-progress-fill {
-            height: 100%;
-            border-radius: 999px;
-        }
-        .sc-meta-row {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 0.45rem;
-            align-items: center;
-            margin-top: 0.45rem;
-        }
-        .sc-mono-chip {
-            font-family: "JetBrains Mono", monospace;
-            font-size: 0.76rem;
-            font-weight: 500;
-            padding: 0.16rem 0.5rem;
-            border-radius: 6px;
-            background: var(--citation-soft);
-            color: var(--citation);
-            border: 1px solid #DBEAFE;
-        }
-        .sc-prereq-chip {
-            font-size: 0.78rem;
-            padding: 0.16rem 0.52rem;
-            border-radius: 6px;
-            background: var(--bg-subtle);
-            color: var(--ink-secondary);
-        }
-        /* Coach & Citation & Diagnostic Boxes */
-        .sc-route-banner {
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: space-between;
-            align-items: center;
-            gap: 0.55rem;
-            padding: 0.55rem 0.85rem;
-            border-radius: 12px;
-            background: var(--brand-soft);
-            border: 1px solid var(--brand-line);
-            margin-bottom: 0.5rem;
-            font-size: 0.84rem;
-        }
-        .sc-route-pill {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.38rem;
-            padding: 0.22rem 0.65rem;
-            border-radius: 999px;
-            font-weight: 700;
-            font-size: 0.78rem;
-        }
-        .sc-route-pill.adaptive { background: var(--brand-soft); color: var(--brand); }
-        .sc-route-pill.remediation { background: var(--misconception-bg); color: var(--misconception-fg); }
-        .sc-route-pill.prereq { background: var(--learning-bg); color: var(--learning-fg); }
-        .sc-route-pill.refuse { background: var(--unseen-bg); color: var(--unseen-fg); }
-        .sc-route-pill.guide { background: var(--citation-soft); color: var(--citation); }
-        .sc-route-pill.eval { background: var(--mastered-bg); color: var(--mastered-fg); }
-        .sc-misc-box {
-            display: flex;
-            align-items: flex-start;
-            gap: 0.65rem;
-            padding: 0.78rem 0.95rem;
-            border-radius: 10px;
-            background: var(--misconception-bg);
-            border: 1px solid var(--misconception-bd);
-            color: var(--misconception-fg);
-            margin: 0.45rem 0;
-            font-size: 0.88rem;
-        }
-        .sc-misc-box.resolved {
-            background: var(--mastered-bg);
-            border-color: var(--mastered-bd);
-            color: var(--mastered-fg);
-        }
-        .sc-section-eyebrow {
-            font-size: 0.76rem;
-            font-weight: 700;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
-            color: var(--ink-muted);
-            margin: 0.2rem 0 0.45rem 0;
-        }
-        .sc-score-hero {
-            font-family: "Newsreader", Georgia, serif;
-            font-size: 3.1rem;
-            font-weight: 700;
-            line-height: 1;
-            color: var(--ink);
-            margin: 0.2rem 0 0.5rem 0;
-        }
-        .sc-score-hero small {
-            font-size: 1.35rem;
-            color: var(--ink-muted);
-        }
-        .sc-chips {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 0.35rem;
-            margin: 0.55rem 0;
-        }
-        .sc-chips span {
-            width: 2rem;
-            height: 2rem;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: 8px;
-            border: 1px solid var(--border-strong);
-            font-size: 0.84rem;
-            font-weight: 600;
-            color: var(--ink-secondary);
-            background: var(--bg-surface);
-        }
-        .sc-chips span.on {
-            background: var(--brand);
-            border-color: var(--brand);
-            color: #FFFFFF;
-        }
-        .sc-chips span.bad {
-            background: var(--misconception-fg);
-            border-color: var(--misconception-fg);
-            color: #FFFFFF;
-        }
-        .sc-matrix-grid {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 0.75rem;
-            margin-bottom: 0.85rem;
-        }
-        @media (max-width: 760px) {
-            .sc-matrix-grid {
-                grid-template-columns: 1fr;
-            }
-        }
-        .sc-diff-card {
-            background: var(--bg-surface);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            overflow: hidden;
-            margin-bottom: 0.75rem;
-        }
-        .sc-diff-head {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 0.5rem;
-            padding: 0.55rem 0.9rem;
-            background: var(--bg-subtle);
-            border-bottom: 1px solid var(--border);
-            font-weight: 700;
-            font-size: 0.88rem;
-        }
-        .sc-diff-del {
-            background: #FEF2F2;
-            color: #991B1B;
-            padding: 0.55rem 0.9rem;
-            font-family: "JetBrains Mono", monospace;
-            font-size: 0.83rem;
-            border-bottom: 1px solid #FECACA;
-        }
-        .sc-diff-add {
-            background: #ECFDF5;
-            color: #065F46;
-            padding: 0.55rem 0.9rem;
-            font-family: "JetBrains Mono", monospace;
-            font-size: 0.83rem;
-            border-bottom: 1px solid #A7F3D0;
-        }
-        .sc-diff-note {
-            padding: 0.55rem 0.9rem;
-            font-size: 0.85rem;
-            color: var(--ink-secondary);
-        }
-        /* ===== Full-width Chatbot Workspace ===== */
-        .sc-chat-ws-header {
-            display: flex;
-            justify-content: flex-start;
-            align-items: center;
-            gap: 0.65rem;
-            background: linear-gradient(135deg, #ffffff 0%, #f0f9f4 100%);
-            border: 1px solid #d5e6dc;
-            border-radius: 14px;
-            padding: 10px 16px;
-            margin-bottom: 8px;
-            box-shadow: var(--card-shadow);
-        }
-        .sc-chat-ws-id {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.65rem;
-            min-width: 0;
-        }
-        .sc-chat-avatar {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            flex: none;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            background: linear-gradient(160deg, #1b5e3c 0%, #166534 100%);
-            color: #ffffff;
-            box-shadow: 0 2px 8px rgba(22, 101, 52, 0.22);
-        }
-        .sc-chat-name {
-            font-size: 0.98rem;
-            font-weight: 700;
-            color: var(--brand-deep);
-            line-height: 1.2;
-        }
-        .sc-chat-status {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.34rem;
-            font-size: 0.76rem;
-            font-weight: 600;
-            color: var(--brand);
-        }
-        .sc-chat-status .sc-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: #22c55e;
-            box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.16);
-        }
-        .sc-context-pill {
-            display: flex;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 0.45rem;
-            background: #e9f5ee;
-            border: 1px solid #cce3d6;
-            border-radius: 12px;
-            padding: 8px 14px;
-            margin-bottom: 10px;
-            font-size: 0.82rem;
-            color: #165231;
-        }
-        .sc-context-pill b {
-            color: #14532d;
-        }
-        .sc-context-pill .sc-context-chip {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.3rem;
-            padding: 0.14rem 0.55rem;
-            border-radius: 999px;
-            background: #ffffff;
-            border: 1px solid #cce3d6;
-            font-weight: 600;
-            color: #165231;
-        }
-        /* ===== st.chat_message bubbles ===== */
-        div[data-testid="stChatMessage"] {
-            border-radius: 16px !important;
-            padding: 0.85rem 1rem !important;
-            margin-bottom: 0.65rem;
-            border: 1px solid #dcebe2;
-            background: var(--bg-surface);
-            box-shadow: var(--card-shadow);
-        }
-        div[data-testid="stChatMessage"]:has(div[data-testid="stChatMessageAvatarUser"]),
-        div[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {
-            background: #e7f6ec;
-            border-color: #cfe8da;
-        }
-        div[data-testid="stChatMessage"]:has(div[data-testid="stChatMessageAvatarAssistant"]),
-        div[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) {
-            background: var(--bg-surface);
-            border-color: #dcebe2;
-        }
-        div[data-testid="stChatMessage"] [data-testid="stChatMessageAvatarUser"],
-        div[data-testid="stChatMessage"] [data-testid="stChatMessageAvatarAssistant"] {
-            width: 34px !important;
-            height: 34px !important;
-            border-radius: 50% !important;
-            background: linear-gradient(160deg, #1b5e3c 0%, #166534 100%) !important;
-            color: #ffffff !important;
-            box-shadow: 0 2px 6px rgba(22, 101, 52, 0.20);
-        }
-        div[data-testid="stChatMessage"] [data-testid="stChatMessageAvatarUser"] {
-            background: linear-gradient(160deg, #2f7d55 0%, #1b5e3c 100%) !important;
-        }
-        div[data-testid="stChatMessage"] p,
-        div[data-testid="stChatMessage"] li {
-            color: var(--ink);
-            font-size: 0.93rem;
-            line-height: 1.62;
-        }
-        div[data-testid="stChatMessage"] a {
-            color: var(--brand);
-            text-decoration: underline;
-            text-underline-offset: 2px;
-        }
-        /* Chat input */
-        div[data-testid="stChatInput"] {
-            border-radius: 14px !important;
-            border: 1px solid var(--border) !important;
-            background: var(--bg-surface) !important;
-            box-shadow: var(--card-shadow);
-        }
-        div[data-testid="stChatInput"]:focus-within {
-            border-color: var(--brand) !important;
-            box-shadow: 0 0 0 3px rgba(22, 101, 52, 0.10) !important;
-        }
-        /* Markdown / code block trong chat */
-        div[data-testid="stChatMessage"] div[data-testid="stCodeBlock"] {
-            border: 1px solid #dcebe2 !important;
-            border-radius: 12px !important;
-            overflow: hidden;
-            background: #f6fbf8 !important;
-        }
-        div[data-testid="stChatMessage"] pre,
-        div[data-testid="stChatMessage"] div[data-testid="stCodeBlock"] pre {
-            background: #f6fbf8 !important;
-            border-radius: 12px !important;
-            padding: 0.8rem 0.95rem !important;
-            margin: 0 !important;
-            overflow-x: auto;
-        }
-        div[data-testid="stChatMessage"] pre code,
-        div[data-testid="stChatMessage"] code {
-            font-family: "JetBrains Mono", monospace !important;
-            font-size: 0.82rem !important;
-            line-height: 1.6 !important;
-            color: var(--ink) !important;
-        }
-        div[data-testid="stChatMessage"] :not(pre) > code {
-            background: var(--brand-soft) !important;
-            color: #14532d !important;
-            border: 1px solid var(--brand-line);
-            border-radius: 6px;
-            padding: 0.08rem 0.38rem;
-        }
-        div[data-testid="stChatMessage"] table {
-            border-collapse: collapse;
-            width: 100%;
-            margin: 0.5rem 0;
-            font-size: 0.86rem;
-        }
-        div[data-testid="stChatMessage"] th {
-            background: var(--brand-soft);
-            color: #14532d;
-            font-weight: 700;
-            text-align: left;
-        }
-        div[data-testid="stChatMessage"] th,
-        div[data-testid="stChatMessage"] td {
-            border: 1px solid var(--border);
-            padding: 0.4rem 0.6rem;
-        }
-        div[data-testid="stChatMessage"] blockquote {
-            border-left: 3px solid var(--brand-line);
-            background: #f6fbf8;
-            margin: 0.5rem 0;
-            padding: 0.45rem 0.85rem;
-            border-radius: 0 10px 10px 0;
-            color: var(--ink-secondary);
-        }
-        /* ===== Responsive: laptop & tablet ===== */
-        @media (max-width: 1280px) {
-            .block-container {
-                padding: 0.85rem 1.1rem 1.25rem 1.1rem !important;
-                max-width: 100% !important;
-            }
-            .sc-bento-grid {
-                grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-                gap: 0.55rem;
-            }
-            .sc-bento-card {
-                padding: 0.55rem 0.7rem;
-            }
-            .sc-masthead {
-                gap: 0.55rem;
-                padding: 0.6rem 0.8rem;
-            }
-            .sc-title {
-                font-size: 1.34rem;
-            }
-            .sc-chat-ws-header {
-                padding: 10px 14px;
-            }
-            div[data-testid="stChatMessage"] {
-                padding: 0.7rem 0.8rem !important;
-            }
-        }
-        @media (max-width: 900px) {
-            .sc-bento-grid {
-                grid-template-columns: repeat(2, minmax(0, 1fr));
-            }
-            .sc-chat-ws-header {
-                flex-direction: column;
-                align-items: flex-start;
-                gap: 0.5rem;
-            }
-            .sc-matrix-grid {
-                grid-template-columns: 1fr;
-            }
-        }
-        /* ===== Layout mẫu AI Learning Workspace ===== */
-        .sc-brand-lockup { display:flex; align-items:center; gap:0.7rem; }
-        .sc-brand-lockup .sc-logo-box { width:42px; height:42px; background:#166534; }
-        .sc-brand-lockup .sc-kicker { font-size:0.64rem; }
-        .sc-brand-lockup .sc-title { font-size:1.35rem; margin:0; }
-        .sc-brand-lockup .sc-subtitle { font-size:0.78rem; }
-        .sc-bento-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); gap:0.7rem; }
-        .sc-bento-card, .sc-bento-card.accent, .sc-bento-card.alert {
-            flex-direction:row; align-items:center; gap:0.7rem;
-            background:#ffffff; border:1px solid #dcebe2; border-left:1px solid #dcebe2;
-            border-radius:14px; padding:0.7rem 0.85rem; box-shadow:none;
-        }
-        .sc-kpi-icon {
-            width:38px; height:38px; flex:none; border-radius:50%;
-            background:#e6f4ec; color:#166534;
-            display:inline-flex; align-items:center; justify-content:center;
-        }
-        .sc-kpi-icon.alert { background:#fdecec; color:#b91c1c; }
-        .sc-kpi-body { display:flex; flex-direction:column; min-width:0; }
-        .sc-bento-value { font-size:1.3rem; }
-        div[data-testid="stSegmentedControl"] [role="radiogroup"],
-        div[data-testid="stSegmentedControl"] > div {
-            width:100%; background:#ffffff; border:1px solid #dcebe2; border-radius:999px; padding:4px; gap:4px;
-        }
-        div[data-testid="stSegmentedControl"] button {
-            flex:1 1 0; border-radius:999px !important; border:none !important;
-            background:transparent !important; color:#166534 !important;
-        }
-        button[data-testid="stBaseButton-segmented_controlActive"],
-        div[data-testid="stSegmentedControl"] button[aria-checked="true"],
-        div[data-testid="stSegmentedControl"] button[aria-pressed="true"],
-        div[data-testid="stSegmentedControl"] button[kind="segmented_controlActive"] {
-            background:#166534 !important; color:#ffffff !important; border-color:#166534 !important;
-        }
-        button[data-testid="stBaseButton-segmented_controlActive"] *,
-        div[data-testid="stSegmentedControl"] button[aria-checked="true"] * {
-            color:#ffffff !important;
-        }
-        div[data-testid="stBottom"],
-        div[data-testid="stBottom"] > div,
-        div[data-testid="stBottomBlockContainer"] {
-            background: #f3f9f6 !important;
-        }
-        div[data-testid="stBottomBlockContainer"] {
-            max-width: 100% !important;
-            width: 100% !important;
-            padding-left: 2rem !important;
-            padding-right: 2rem !important;
-            padding-top: 0.5rem !important;
-            padding-bottom: 0.9rem !important;
-        }
-        div[data-testid="stChatInput"] {
-            max-width: 100% !important;
-            width: 100% !important;
-            background: #ffffff !important;
-            border: 1px solid #cfe3d7 !important;
-            border-radius: 14px !important;
-            box-shadow: 0 2px 10px rgba(22, 101, 52, 0.06) !important;
-        }
-        div[data-testid="stSpinner"] > div {
-            display: flex !important;
-            align-items: center !important;
-            gap: 0.7rem !important;
-            background: linear-gradient(135deg, #ffffff 0%, #f0f9f4 100%) !important;
-            border: 1px solid #cfe3d7 !important;
-            border-radius: 14px !important;
-            padding: 12px 16px !important;
-            margin: 8px 0 !important;
-            box-shadow: 0 2px 10px rgba(22, 101, 52, 0.06) !important;
-            color: #165231 !important;
-            font-weight: 500 !important;
-        }
-        div[data-testid="stSpinner"] svg,
-        div[data-testid="stStatusWidget"] svg {
-            color: #166534 !important;
-        }
-        div[data-testid="stStatusWidget"] {
-            background: linear-gradient(135deg, #ffffff 0%, #f2faf5 100%) !important;
-            border: 1px solid #cfe3d7 !important;
-            border-radius: 14px !important;
-            box-shadow: 0 3px 12px rgba(22, 101, 52, 0.07) !important;
-        }
-        .sc-login-card {
-            width:100%; box-sizing:border-box; margin:4vh auto 1rem auto; padding:1.6rem 1.8rem;
-            background:#ffffff; border:1.5px solid #166534; border-radius:18px;
-            box-shadow:0 8px 28px rgba(22,101,52,0.10); text-align:center;
-        }
-        .sc-login-card .sc-brand-lockup { justify-content:center; text-align:left; }
-        .sc-login-card p { color:var(--ink-secondary); font-size:0.88rem; margin:0.6rem 0 0 0; }
-        @media (max-width: 960px) { .sc-bento-grid { grid-template-columns: repeat(2, minmax(0,1fr)); } }
-        /* ===== 5-Tier Visual Hierarchy ===== */
-        /* Tier 1: Top navigation segmented bar — sage track, dark active pill */
-        div[data-testid="stSegmentedControl"],
-        div[data-testid="stButtonGroup"] {
-            background: #dceee3 !important;
-            border: 1.5px solid #b7d7c4 !important;
-            border-radius: 14px !important;
-            padding: 5px 6px !important;
-            box-shadow: inset 0 1px 2px rgba(15, 46, 29, 0.06) !important;
-        }
-        div[data-testid="stSegmentedControl"] [role="radiogroup"],
-        div[data-testid="stSegmentedControl"] > div,
-        div[data-testid="stButtonGroup"] > div {
-            background: transparent !important;
-            border: none !important;
-            box-shadow: none !important;
-            padding: 0 !important;
-            gap: 5px !important;
-            width: 100% !important;
-        }
-        div[data-testid="stSegmentedControl"] button,
-        div[data-testid="stButtonGroup"] button {
-            background: transparent !important;
-            border: none !important;
-            box-shadow: none !important;
-            color: #23533a !important;
-            font-weight: 600 !important;
-            border-radius: 10px !important;
-            min-height: 36px !important;
-        }
-        button[kind="segmented_controlActive"],
-        button[data-testid="stBaseButton-segmented_controlActive"],
-        div[data-testid="stSegmentedControl"] button[aria-checked="true"],
-        div[data-testid="stSegmentedControl"] button[aria-pressed="true"],
-        div[data-testid="stButtonGroup"] button[aria-checked="true"],
-        div[data-testid="stButtonGroup"] button[aria-pressed="true"] {
-            background: linear-gradient(135deg, #14532d 0%, #166534 100%) !important;
-            color: #ffffff !important;
-            border: none !important;
-            font-weight: 700 !important;
-            box-shadow: 0 3px 10px rgba(20, 83, 45, 0.28) !important;
-        }
-        button[kind="segmented_controlActive"] p,
-        button[kind="segmented_controlActive"] span,
-        button[data-testid="stBaseButton-segmented_controlActive"] p,
-        button[data-testid="stBaseButton-segmented_controlActive"] span,
-        div[data-testid="stSegmentedControl"] button[aria-checked="true"] p,
-        div[data-testid="stSegmentedControl"] button[aria-checked="true"] span,
-        div[data-testid="stSegmentedControl"] button[aria-pressed="true"] p,
-        div[data-testid="stSegmentedControl"] button[aria-pressed="true"] span {
-            color: #ffffff !important;
-            font-weight: 700 !important;
-        }
-        /* Tier 2: Secondary vs primary action buttons */
-        div[data-testid="stButton"] > button[kind="secondary"] {
-            background: #f0f8f3 !important;
-            color: #166534 !important;
-            border: 1px solid #b6d9c4 !important;
-            border-radius: 999px !important;
-            font-weight: 600 !important;
-            font-size: 0.82rem !important;
-            min-height: 34px !important;
-            padding: 0.28rem 0.85rem !important;
-            box-shadow: 0 1px 2px rgba(22, 101, 52, 0.05) !important;
-        }
-        div[data-testid="stButton"] > button[kind="secondary"]:hover {
-            background: #dcf0e4 !important;
-            border-color: #16a34a !important;
-            color: #0f3d22 !important;
-            transform: translateY(-1px);
-        }
-        div[data-testid="stButton"] > button[kind="primary"],
-        div[data-testid="stFormSubmitButton"] > button {
-            border-radius: 999px !important;
-            background: linear-gradient(135deg, #16a34a 0%, #15803d 100%) !important;
-            color: #ffffff !important;
-            border: none !important;
-            min-height: 38px !important;
-            font-weight: 700 !important;
-            box-shadow: 0 3px 10px rgba(22, 163, 74, 0.25) !important;
-        }
-        div[data-testid="stButton"] > button[kind="primary"] *,
-        div[data-testid="stFormSubmitButton"] > button * {
-            color: #ffffff !important;
-            font-weight: 700 !important;
-        }
-        /* Tier 3: Expanders — soft tinted collapsible drawers */
-        div[data-testid="stExpander"],
-        div[data-testid="stExpander"] details {
-            background: #ebf6ef !important;
-            border: 1px solid #c6e2d1 !important;
-            border-radius: 10px !important;
-            box-shadow: none !important;
-        }
-        div[data-testid="stExpander"] summary {
-            padding: 0.45rem 0.85rem !important;
-            font-size: 0.82rem !important;
-            font-weight: 600 !important;
-            color: #1e4d33 !important;
-        }
-        /* Tier 4: Chat messages — distinct user vs assistant surfaces */
-        div[data-testid="stChatMessage"] {
-            border-radius: 14px !important;
-            padding: 0.85rem 1.1rem !important;
-            margin-bottom: 0.65rem !important;
-            background: #ffffff !important;
-            border: 1px solid #dcebe2 !important;
-            box-shadow: 0 2px 6px rgba(15, 46, 29, 0.03) !important;
-        }
-        div[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {
-            background: #e3f5ea !important;
-            border: 1px solid #bce2ca !important;
-        }
-        div[data-testid="stChatMessage"] div[data-testid="stButton"] {
-            margin-top: 0.65rem !important;
-            margin-bottom: 0.5rem !important;
-        }
-        div[data-testid="stChatMessage"] div[data-testid="stExpander"] {
-            background: #f5faf7 !important;
-            border: 1px dashed #c5dfd0 !important;
-            border-radius: 8px !important;
-            margin-top: 0.55rem !important;
-        }
-        /* Tier 5: Unified chat card classes */
-        div[data-testid="stVerticalBlockBorderWrapper"] {
-            background: #ffffff !important;
-            border: 1.5px solid #cde2d5 !important;
-            border-radius: 18px !important;
-            box-shadow: 0 6px 22px rgba(15, 46, 29, 0.06) !important;
-        }
-        .sc-chat-card-header {
-            display: flex;
-            align-items: center;
-            gap: 0.75rem;
-            padding: 0.15rem 0.2rem;
-        }
-        .sc-chat-avatar-badge {
-            width: 40px;
-            height: 40px;
-            border-radius: 12px;
-            background: linear-gradient(135deg, #14532d 0%, #166534 100%);
-            color: #ffffff;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.2rem;
-            box-shadow: 0 3px 8px rgba(20, 83, 45, 0.22);
-            flex-shrink: 0;
-        }
-        .sc-quick-label {
-            font-size: 0.75rem;
-            font-weight: 700;
-            color: #3b634c;
-            letter-spacing: 0.03em;
-            margin: 0.25rem 0 0.3rem 0.15rem;
-        }
-        .sc-trace-box {
-            font-size: 0.82rem;
-            color: var(--ink-secondary);
-            line-height: 1.5;
-        }
-        .stElementContainer:has(div[data-testid="stHtml"] script),
-        div[data-testid="stHtml"]:has(script) {
-            display: none !important;
-            height: 0 !important;
-            margin: 0 !important;
-            padding: 0 !important;
-        }
-        </style>
-        """
-    )
-
-
-def render_masthead_html(doc_title: str, is_live: bool, model_name: str) -> str:
-    mode_cls = "live" if is_live else "demo"
-    mode_icon = "shield-check" if is_live else "cpu"
-    mode_txt = f"AI Portal Live ({model_name})" if is_live else "Chế độ Demo Offline (Bám nguồn thật)"
-    return clean_html(
-        f"""
-        <div class="sc-masthead">
-          <div class="sc-brand-row">
-            <div class="sc-logo-box">{icon_svg("brain", 24)}</div>
-            <div>
-              <div class="sc-kicker">AIA19_Group1 · Adaptive Personal AI Tutor</div>
-              <div class="sc-title">Study Coach</div>
-              <p class="sc-subtitle">Gia sư hiểu năng lực từng người học trên tài liệu riêng · 5 lớp công nghệ LangChain &amp; LangGraph</p>
-            </div>
-          </div>
-          <div class="sc-badges">
-            <span class="sc-pill">{icon_svg("book", 15)} {esc(doc_title)}</span>
-            <span class="sc-pill {mode_cls}">{icon_svg(mode_icon, 15)} {esc(mode_txt)}</span>
-          </div>
-        </div>
-        """
-    )
+    """Trả về chuỗi <link> font + <style> đọc từ core/ui_theme.css (design tokens & component styles)."""
+    css = _CSS_PATH.read_text(encoding="utf-8")
+    return _FONT_LINKS + "\n<style>\n" + clean_html(css) + "\n</style>"
 
 
 def render_brand_lockup_html(subtitle: str = "Gia sư hiểu năng lực từng người học trên tài liệu riêng") -> str:
     return clean_html(
         f"""
         <div class="sc-brand-lockup">
-          <div class="sc-logo-box">{icon_svg("brain", 24)}</div>
+          <div class="sc-logo-box">{icon_svg("brain", 22)}</div>
           <div>
-            <div class="sc-kicker">AI19_GROUP1 · ADAPTIVE PERSONAL AI TUTOR</div>
             <div class="sc-title">Study Coach</div>
             <p class="sc-subtitle">{esc(subtitle)}</p>
           </div>
@@ -1122,37 +83,369 @@ def render_brand_lockup_html(subtitle: str = "Gia sư hiểu năng lực từng 
     )
 
 
-def render_bento_strip_html(dna: LearnerDNA, coverage: dict, telemetry: dict) -> str:
-    misc = len(dna.active_misconceptions)
-    calls = telemetry.get("total_calls", 0)
-    attempts = sum(c.attempts for c in dna.concepts)
+def render_masthead_html(doc_title: str, is_live: bool, model_name: str) -> str:
+    """Giữ lại để tương thích ngược: lockup thương hiệu kèm tên tài liệu và trạng thái kết nối."""
+    mode_txt = f"AI Portal Live ({model_name})" if is_live else "Chưa kết nối AI Portal"
+    pill_cls = "sc-live-pill" if is_live else "sc-live-pill off"
+    return clean_html(
+        f"""
+        <div class="sc-panel" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.75rem;">
+          {render_brand_lockup_html()}
+          <div class="sc-meta-row" style="margin:0;">
+            <span class="sc-prereq-chip">{esc(doc_title)}</span>
+            <span class="{pill_cls}">{esc(mode_txt)}</span>
+          </div>
+        </div>
+        """
+    )
 
-    def card(icon: str, label: str, value: str, meta: str, alert: bool = False) -> str:
+
+def render_login_hero_html() -> str:
+    """Khối giới thiệu bên trái màn đăng nhập."""
+    items = [
+        ("layers", "Bản đồ năng lực theo từng khái niệm", "Biết chính xác phần nào đã vững, phần nào còn hổng."),
+        ("quote", "Gia sư Socratic bám sát tài liệu", "Mọi câu trả lời đều trích nguồn, không bịa ngoài tài liệu."),
+        ("target", "Quiz thích ứng bắt đúng lỗi tư duy", "Mỗi đáp án sai chỉ ra bạn đang hiểu lệch ở đâu."),
+    ]
+    items_html = "".join(
+        f'<div class="sc-hero-item"><div class="sc-hero-item-icon">{icon_svg(ic, 17)}</div>'
+        f"<div><b>{esc(title)}</b><span>{esc(desc)}</span></div></div>"
+        for ic, title, desc in items
+    )
+    return clean_html(
+        f"""
+        <div class="sc-hero">
+          {render_brand_lockup_html("Adaptive Personal AI Tutor · AIA19 Group 1")}
+          <div>
+            <div class="sc-hero-headline">Học đúng chỗ mình còn yếu, trên <em>chính tài liệu của bạn</em>.</div>
+            <p class="sc-hero-lead">Tải giáo trình lên, làm bài chẩn đoán vài phút, và để gia sư AI dẫn bạn đi từ chỗ đang hiểu lệch tới chỗ làm chủ.</p>
+          </div>
+          <div class="sc-hero-list">{items_html}</div>
+        </div>
+        """
+    )
+
+
+def render_auth_head_html() -> str:
+    return clean_html(
+        """
+        <div class="sc-auth-head">
+          <h2>Bắt đầu phiên học</h2>
+          <p>Đăng nhập bằng tài khoản của bạn hoặc đăng ký mới. Trình độ ban đầu được đánh giá qua bài kiểm tra đầu vào.</p>
+        </div>
+        """
+    )
+
+
+def render_sidebar_status_html(doc_title: str, level: str, coverage_pct: float, streak_days: int | None = None) -> str:
+    """Khối 'đang học' trong thanh dọc: tên tài liệu, trình độ, % hoàn thành và chuỗi ngày học."""
+    pct = max(0.0, min(100.0, coverage_pct))
+    streak_html = ""
+    if streak_days is not None:
+        streak_txt = f"Chuỗi {int(streak_days)} ngày học" if streak_days else "Chưa có chuỗi ngày học"
+        streak_html = f'<div class="sc-side-streak">{icon_svg("flame", 14)}<span>{esc(streak_txt)}</span></div>'
+    return clean_html(
+        f"""
+        <div class="sc-side-status">
+          <div class="sc-side-label">Đang học</div>
+          <div class="sc-side-doc">{icon_svg("book", 15)}<span>{esc(doc_title)}</span></div>
+          <div class="sc-side-level"><span>{esc(level)}</span><b>{pct:.0f}%</b></div>
+          <div class="sc-progress-track"><div class="sc-progress-fill" style="width:{pct:.0f}%;"></div></div>
+          {streak_html}
+        </div>
+        """
+    )
+
+
+def render_streak_html(streak: dict, due_count: int, misc_count: int) -> str:
+    """Thẻ chuỗi ngày học + số mục cần ôn hôm nay (trang Ôn hôm nay và đầu trang Bản đồ)."""
+    cur = int(streak.get("current", 0) or 0)
+    longest = int(streak.get("longest", 0) or 0)
+    if streak.get("studied_today"):
+        hint = "Hôm nay bạn đã học. Giữ nhịp này nhé."
+    elif cur:
+        hint = "Hôm nay chưa học: làm một phiên ôn để nối chuỗi."
+    else:
+        hint = "Làm một phiên ôn để bắt đầu chuỗi ngày học."
+    return clean_html(
+        f"""
+        <div class="sc-streak">
+          <div class="sc-streak-main">
+            <div class="sc-streak-icon{' on' if cur else ''}">{icon_svg("flame", 22)}</div>
+            <div>
+              <div class="sc-streak-num">{cur}<small>ngày liên tục</small></div>
+              <div class="sc-streak-hint">{esc(hint)} Kỷ lục: {longest} ngày.</div>
+            </div>
+          </div>
+          <div class="sc-streak-stats">
+            <div><b>{int(due_count)}</b><span>khái niệm đến hạn ôn</span></div>
+            <div><b>{int(misc_count)}</b><span>lỗi tư duy đang mở</span></div>
+          </div>
+        </div>
+        """
+    )
+
+
+def render_review_targets_html(targets: list[dict]) -> str:
+    """Danh sách mục sẽ được ôn trong phiên hôm nay."""
+    if not targets:
+        return ""
+    rows = []
+    for t in targets:
+        is_misc = t.get("reason") == "misconception"
+        badge = (
+            '<span class="sc-status-badge misconception">Lỗi tư duy</span>'
+            if is_misc
+            else '<span class="sc-status-badge learning">Đến hạn ôn</span>'
+        )
+        rows.append(
+            f'<div class="sc-review-row"><div><b>{esc(t.get("topic", ""))}</b>'
+            f'<span>{esc(t.get("detail", ""))}</span></div>'
+            f'<div class="sc-review-meta">{badge}<i>{float(t.get("mastery_score", 0) or 0):.0f}%</i></div></div>'
+        )
+    return clean_html(f'<div class="sc-review-list">{"".join(rows)}</div>')
+
+
+# ---------- Trình đọc tài liệu & đánh dấu đoạn được trích dẫn ----------
+def section_anchor(index: int) -> str:
+    return f"sc-sec-{index + 1}"
+
+
+def find_highlight_ranges(text: str, snippets: list[str]) -> list[tuple[int, int]]:
+    """Tìm vị trí các đoạn trích (chunk Gia sư đã dùng) trong văn bản một mục.
+
+    So khớp bỏ qua khác biệt khoảng trắng; đoạn trích không khớp nguyên khối thì thử từng câu của nó.
+    Trả các khoảng [start, end) đã gộp, sắp theo thứ tự."""
+    ranges: list[tuple[int, int]] = []
+
+    def _find(piece: str) -> tuple[int, int] | None:
+        words = piece.split()
+        if not words:
+            return None
+        pattern = r"\s+".join(re.escape(w) for w in words)
+        m = re.search(pattern, text)
+        return (m.start(), m.end()) if m else None
+
+    for snip in snippets or []:
+        snip = (snip or "").strip()
+        if len(snip) < 8:
+            continue
+        hit = _find(snip)
+        if hit:
+            ranges.append(hit)
+            continue
+        for sent in re.split(r"(?<=[.!?])\s+|\n+", snip):
+            if len(sent.strip()) >= 20:
+                hit = _find(sent.strip())
+                if hit:
+                    ranges.append(hit)
+    ranges.sort()
+    merged: list[tuple[int, int]] = []
+    for start, end in ranges:
+        if merged and start <= merged[-1][1] + 1:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def highlight_text_html(text: str, snippets: list[str] | None = None, query: str = "") -> str:
+    """Escape văn bản, bọc <mark> quanh đoạn được trích dẫn (và từ khóa tìm kiếm nếu có)."""
+    ranges = find_highlight_ranges(text, snippets or [])
+    q = (query or "").strip()
+    if q and len(q) >= 2:
+        ranges += [(m.start(), m.end()) for m in re.finditer(re.escape(q), text, flags=re.IGNORECASE)]
+        ranges.sort()
+        merged: list[tuple[int, int]] = []
+        for start, end in ranges:
+            if merged and start <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        ranges = merged
+    out: list[str] = []
+    pos = 0
+    for start, end in ranges:
+        out.append(esc(text[pos:start]))
+        out.append(f'<mark class="sc-hl">{esc(text[start:end])}</mark>')
+        pos = end
+    out.append(esc(text[pos:]))
+    return "".join(out).replace("\n", "<br>")
+
+
+def render_doc_section_html(
+    section: dict,
+    index: int,
+    snippets: list[str] | None = None,
+    focused: bool = False,
+    query: str = "",
+    with_anchor: bool = True,
+) -> str:
+    """Một mục của tài liệu: nhãn [Trang/Mục n] (trùng với nhãn trích dẫn), nguồn và nội dung."""
+    text = str(section.get("text", ""))
+    # Mục được trích mà không khớp đoạn con nào: đánh dấu cả mục (qua class focus) thay vì để trống.
+    body = highlight_text_html(text, snippets, query)
+    anchor = f' id="{section_anchor(index)}"' if with_anchor else ""
+    cls = "sc-doc-section focus" if focused else "sc-doc-section"
+    return clean_html(
+        f"""
+        <div class="{cls}"{anchor}>
+          <div class="sc-doc-section-head">
+            <span class="sc-mono-chip">{icon_svg("quote", 12)} {esc(section.get("page", ""))}</span>
+            <span class="sc-doc-source">{esc(section.get("source", ""))}</span>
+          </div>
+          <div class="sc-doc-section-body">{body}</div>
+        </div>
+        """
+    )
+
+
+def render_doc_toc_html(sections: list[dict], indexes: list[int] | None = None) -> str:
+    """Mục lục của tài liệu: mỗi dòng là một liên kết neo tới đúng mục trong trang."""
+    idxs = indexes if indexes is not None else list(range(len(sections)))
+    links = "".join(
+        f'<a href="#{section_anchor(i)}"><span class="sc-mono-chip">{esc(sections[i].get("page", ""))}</span>'
+        f'<span>{esc(str(sections[i].get("topic_hint", ""))[:60])}</span></a>'
+        for i in idxs
+    )
+    return clean_html(f'<nav class="sc-doc-toc" aria-label="Mục lục tài liệu">{links}</nav>')
+
+
+def render_page_head_html(title: str, lead: str) -> str:
+    return clean_html(f'<div class="sc-page-head"><h2>{esc(title)}</h2><p>{esc(lead)}</p></div>')
+
+
+def render_chat_header_html(is_live: bool) -> str:
+    pill = (
+        '<span class="sc-live-pill">Trực tuyến</span>'
+        if is_live
+        else '<span class="sc-live-pill off">Chưa kết nối</span>'
+    )
+    return clean_html(
+        f"""
+        <div class="sc-chat-card-header">
+          <div class="sc-chat-avatar-badge">{icon_svg("brain", 22)}</div>
+          <div>
+            <div class="sc-chat-name"><span>Study Coach AI</span> {pill}</div>
+            <div class="sc-chat-sub">Gia sư Socratic thích ứng theo tài liệu của bạn</div>
+          </div>
+        </div>
+        """
+    )
+
+
+def render_chat_empty_html(name: str, level: str) -> str:
+    return clean_html(
+        f"""
+        <div class="sc-empty">
+          <div class="sc-empty-icon">{icon_svg("brain", 28)}</div>
+          <div class="sc-empty-title">Chào {esc(name)}, hôm nay học gì?</div>
+          <div class="sc-empty-text">Gia sư đã nạp hồ sơ của bạn (trình độ <b>{esc(level)}</b>). Chọn một gợi ý bên dưới hoặc đặt câu hỏi về tài liệu ở thanh nhập liệu.</div>
+        </div>
+        """
+    )
+
+
+def render_coach_context_html(doc_title: str, topics: str, name: str, level: str, open_errors: int) -> str:
+    """Thẻ bối cảnh học tập ở cột phải của màn Gia sư."""
+    err_cls = "misconception" if open_errors else "mastered"
+    err_txt = f"{open_errors} lỗi đang mở" if open_errors else "Không có lỗi đang mở"
+    return clean_html(
+        f"""
+        <div class="sc-ctx">
+          <div class="sc-ctx-title">Bối cảnh học tập</div>
+          <div class="sc-ctx-row">{icon_svg("book", 15)}<div><span>Tài liệu</span><b>{esc(doc_title)}</b></div></div>
+          <div class="sc-ctx-row">{icon_svg("layers", 15)}<div><span>Chủ đề mở đầu</span><b>{esc(topics)}</b></div></div>
+          <div class="sc-ctx-row">{icon_svg("user", 15)}<div><span>Người học</span><b>{esc(name)} · {esc(level)}</b></div></div>
+          <div class="sc-meta-row"><span class="sc-status-badge {err_cls}">{esc(err_txt)}</span></div>
+        </div>
+        """
+    )
+
+
+def render_typing_html(label: str = "Gia sư đang suy nghĩ") -> str:
+    """Chỉ báo đang soạn câu trả lời (ba chấm nhấp nháy) trong bong bóng của Gia sư."""
+    return clean_html(
+        f"""
+        <div class="sc-typing" role="status" aria-live="polite">
+          <span class="sc-typing-dots"><i></i><i></i><i></i></span>
+          <span>{esc(label)}…</span>
+        </div>
+        """
+    )
+
+
+def render_socratic_question_html(question: str) -> str:
+    return clean_html(
+        f"""
+        <div class="sc-socratic">
+          {icon_svg("quote", 15)}
+          <div><b>Câu hỏi Socratic dành cho bạn:</b> {esc(question)}</div>
+        </div>
+        """
+    )
+
+
+def render_vision_step_html(step_name: str, status: str, feedback: str, page_ref: str) -> str:
+    badge_cls = "mastered" if status == "Đúng" else ("learning" if status == "Cần chỉnh" else "misconception")
+    ic_name = "check-circle" if status == "Đúng" else ("clock" if status == "Cần chỉnh" else "alert-triangle")
+    return clean_html(
+        f"""
+        <div class="sc-step-card">
+          <div class="sc-step-head">
+            <span>{esc(step_name)}</span>
+            <span class="sc-status-badge {badge_cls}">{icon_svg(ic_name, 13)} {esc(status)}</span>
+          </div>
+          <div class="sc-step-body">{esc(feedback)} <span class="sc-mono-chip">{esc(page_ref)}</span></div>
+        </div>
+        """
+    )
+
+
+def render_bento_strip_html(dna: LearnerDNA, coverage: dict, activity: dict | None = None) -> str:
+    """Dải KPI của RIÊNG người học. `activity`: {"streak_days", "coach_questions"} (số liệu theo người học;
+    số lượt gọi AI toàn hệ thống đã chuyển sang bảng kỹ thuật ở trang Số liệu)."""
+    activity = activity or {}
+    misc = len(dna.active_misconceptions)
+    streak_days = int(activity.get("streak_days", 0) or 0)
+    coach_q = int(activity.get("coach_questions", 0) or 0)
+    attempts = sum(c.attempts for c in dna.concepts)
+    cov_pct = max(0.0, min(100.0, float(coverage.get("coverage_pct", 0) or 0)))
+
+    def card(icon: str, label: str, value: str, meta: str, alert: bool = False, extra: str = "") -> str:
         cls = " alert" if alert else ""
         return (
-            f'<div class="sc-bento-card"><div class="sc-kpi-icon{cls}">{icon_svg(icon, 18)}</div>'
-            f'<div class="sc-kpi-body"><div class="sc-bento-label">{label}</div>'
-            f'<div class="sc-bento-value">{value}</div><div class="sc-bento-meta">{meta}</div></div></div>'
+            f'<div class="sc-kpi"><div class="sc-kpi-top"><span class="sc-kpi-label">{label}</span>'
+            f'<span class="sc-kpi-icon{cls}">{icon_svg(icon, 16)}</span></div>'
+            f'<div class="sc-kpi-value">{value}</div><div class="sc-kpi-meta">{meta}</div>{extra}</div>'
         )
 
+    progress = (
+        f'<div class="sc-progress-track"><div class="sc-progress-fill" style="width:{cov_pct:.0f}%;"></div></div>'
+    )
     return clean_html(
         '<div class="sc-bento-grid">'
-        + card("layers", "Tiến độ học tập", esc(dna.overall_level),
-               f"đã hoàn thành {coverage.get('coverage_pct', 0):.0f}% khóa học")
-        + card("check-circle", "Độ chính xác", f"{dna.mastery_avg:.0f}%", "điểm nắm vững trung bình")
-        + card("alert-triangle", "Lỗi thường gặp", str(misc), "cần ôn tập thêm", alert=misc > 0)
-        + card("cpu", "Phiên học", f"{calls} lượt", "AI Portal Live")
-        + card("book", "Điểm danh hiệu", f"{attempts} câu", "đã luyện tập")
+        + card("layers", "Trình độ", esc(dna.overall_level), f"đã hoàn thành {cov_pct:.0f}% khóa học", extra=progress)
+        + card("check-circle", "Độ chính xác", f"{dna.mastery_avg:.0f}<small>%</small>", "điểm nắm vững trung bình")
+        + card(
+            "alert-triangle",
+            "Lỗi tư duy đang mở",
+            str(misc),
+            "cần ôn tập thêm" if misc else "chưa ghi nhận lỗi nào",
+            alert=misc > 0,
+        )
+        + card("book", "Đã luyện tập", f"{attempts}<small>câu</small>", "tổng lượt trả lời")
+        + card("flame", "Chuỗi ngày học", f"{streak_days}<small>ngày</small>", f"đã hỏi Gia sư {coach_q} câu")
         + "</div>"
     )
 
 
 def _status_meta(status: str) -> tuple[str, str, str]:
     return {
-        "mastered": ("Đã làm chủ", "check-circle", "#15803d"),
-        "learning": ("Cần ôn lại", "clock", "#B45309"),
-        "misconception": ("Đang hiểu lệch", "alert-triangle", "#B91C1C"),
-    }.get(status, ("Chưa học", "circle-dashed", "#475569"))
+        "mastered": ("Đã làm chủ", "check-circle", "#107A4D"),
+        "learning": ("Cần ôn lại", "clock", "#B25E09"),
+        "misconception": ("Đang hiểu lệch", "alert-triangle", "#C0291C"),
+    }.get(status, ("Chưa học", "circle-dashed", "#525B6B"))
 
 
 def render_concept_card_html(node: ConceptNode, mastery: ConceptMastery) -> str:
@@ -1171,7 +464,7 @@ def render_concept_card_html(node: ConceptNode, mastery: ConceptMastery) -> str:
             <h4 class="sc-card-title">{esc(node.name)}</h4>
             <span class="sc-status-badge {esc(mastery.status)}">{icon_svg(ic, 14)} {esc(label)} · {mastery.mastery_score:.0f}%</span>
           </div>
-          <p style="margin:0 0 0.35rem 0;font-size:0.88rem;color:var(--ink-secondary);">{esc(node.summary)}</p>
+          <p class="sc-card-desc">{esc(node.summary)}</p>
           <div class="sc-progress-track">
             <div class="sc-progress-fill" style="width:{pct:.0f}%;background:{color};"></div>
           </div>
@@ -1202,11 +495,9 @@ def render_route_banner_html(turn: CoachTurnResult) -> str:
         <div class="sc-route-banner">
           <div style="display:flex;align-items:center;gap:0.55rem;flex-wrap:wrap;">
             <span class="sc-route-pill {cls}">{icon_svg(ic, 14)} {esc(label)}</span>
-            <span style="color:var(--ink-secondary);">Trình độ áp dụng: <b>{esc(turn.learner_level_used)}</b></span>
+            <span>Trình độ áp dụng: <b>{esc(turn.learner_level_used)}</b></span>
           </div>
-          <div style="font-family:'JetBrains Mono',monospace;font-size:0.78rem;color:var(--ink-muted);">
-            {turn.latency_ms} ms · {len(turn.tool_traces)} tools
-          </div>
+          <div class="sc-route-meta">{turn.latency_ms} ms · {len(turn.tool_traces)} tools</div>
         </div>
         """
     )
@@ -1233,7 +524,7 @@ def render_misconception_card_html(
         <div class="{cls}">
           <div style="padding-top:2px;">{icon_svg(ic, 17)}</div>
           <div>
-            <div style="font-weight:700;">{esc(topic)} · <span style="font-weight:600;">{esc(state_txt)}</span></div>
+            <div style="font-weight:700;">{esc(topic)} · <span style="font-weight:500;">{esc(state_txt)}</span></div>
             <div style="color:var(--ink);margin-top:2px;">{esc(description)}</div>
           </div>
         </div>
@@ -1245,16 +536,14 @@ def render_next_step_callout_html(dna: LearnerDNA, top_plan: dict) -> str:
     """Hiển thị khuyến nghị bước học tiếp theo ngay trên đầu Bản đồ Năng lực."""
     return clean_html(
         f"""
-        <div style="background:var(--brand-soft);border:1px solid var(--brand-line);border-left:4px solid var(--brand);border-radius:14px;padding:0.8rem 1rem;margin:0.4rem 0 0.7rem 0;display:flex;align-items:flex-start;gap:0.7rem;box-shadow:var(--card-shadow);">
-          <div style="color:var(--brand);padding-top:2px;">{icon_svg("target", 18)}</div>
+        <div class="sc-callout">
+          <div class="sc-callout-icon">{icon_svg("target", 18)}</div>
           <div>
-            <div style="font-size:0.78rem;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--brand);">
-              Bước tiếp theo AI đề xuất cho {esc(dna.name)}
+            <div class="sc-callout-kicker">Bước tiếp theo AI đề xuất cho {esc(dna.name)} · {esc(top_plan['priority_label'])}</div>
+            <div class="sc-callout-title">
+              {esc(top_plan['concept'])} <span class="sc-mono-chip">{esc(top_plan.get('page_ref') or '[Tài liệu]')}</span>
             </div>
-            <div style="font-size:0.95rem;font-weight:700;color:var(--ink);margin-top:2px;">
-              [{esc(top_plan['priority_label'])}] {esc(top_plan['concept'])} <span class="sc-mono-chip">{esc(top_plan.get('page_ref') or '[Tài liệu]')}</span>
-            </div>
-            <div style="font-size:0.86rem;color:var(--ink-secondary);margin-top:2px;">{esc(top_plan['reason'])}</div>
+            <div class="sc-callout-body">{esc(top_plan['reason'])}</div>
           </div>
         </div>
         """
@@ -1267,20 +556,20 @@ def render_mastery_chart_html(concepts: list[ConceptMastery]) -> str:
         return ""
     rows_html = []
     for c in concepts:
-        label, ic, color = _status_meta(c.status)
+        _label, ic, color = _status_meta(c.status)
         pct = max(2.0 if c.attempts > 0 else 0.0, min(100.0, c.mastery_score))
         rows_html.append(
-            f'<div style="display:grid;grid-template-columns:minmax(160px,2.1fr) minmax(110px,3.5fr) 148px;gap:0.75rem;align-items:center;padding:0.42rem 0;border-bottom:1px solid var(--border);">'
-            f'<div style="font-size:0.86rem;font-weight:600;color:var(--ink);">{esc(c.concept)}</div>'
-            f'<div style="background:var(--bg-subtle);height:10px;border-radius:999px;overflow:hidden;"><div style="width:{pct:.0f}%;height:100%;background:{color};border-radius:999px;"></div></div>'
-            f'<div style="display:flex;justify-content:flex-end;align-items:center;gap:0.35rem;white-space:nowrap;font-size:0.8rem;font-weight:700;color:{color};font-family:\'JetBrains Mono\',monospace;">{icon_svg(ic, 13)} {c.mastery_score:.0f}% · {esc(c.bloom_level)}</div>'
-            f'</div>'
+            f'<div class="sc-chart-row">'
+            f'<div class="sc-chart-name">{esc(c.concept)}</div>'
+            f'<div class="sc-chart-track"><div style="width:{pct:.0f}%;height:100%;background:{color};border-radius:999px;"></div></div>'
+            f'<div class="sc-chart-val" style="color:{color};">{icon_svg(ic, 13)} {c.mastery_score:.0f}% · {esc(c.bloom_level)}</div>'
+            f"</div>"
         )
     inner = "".join(rows_html)
     return clean_html(
         f"""
-        <div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:14px;padding:0.9rem 1.05rem;margin-bottom:0.75rem;box-shadow:var(--card-shadow);">
-          <div style="font-size:0.9rem;font-weight:700;color:var(--brand-deep);margin-bottom:0.45rem;">Biểu đồ năng lực thành thạo theo từng khái niệm &amp; cấp độ Bloom</div>
+        <div class="sc-panel">
+          <div class="sc-panel-title">Mức thành thạo theo từng khái niệm &amp; cấp độ Bloom</div>
           {inner}
         </div>
         """
@@ -1312,18 +601,16 @@ def render_incident_ticket_html(scenario: IncidentScenario) -> str:
     sev_cls = "misconception" if scenario.severity == "SEV-1" else "learning"
     return clean_html(
         f"""
-        <div style="background:var(--bg-surface);border:1px solid var(--border-strong);border-left:5px solid var(--misconception-fg);border-radius:14px;padding:0.9rem 1.1rem;margin:0.4rem 0 0.7rem 0;box-shadow:var(--card-shadow);">
-          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.4rem;">
-            <span style="display:inline-flex;align-items:center;gap:0.45rem;font-weight:700;font-size:0.92rem;color:var(--misconception-fg);">
-              {icon_svg("flame", 17)} TICKET SỰ CỐ PRODUCTION · {esc(scenario.ticket_id)}
-            </span>
+        <div class="sc-ticket">
+          <div class="sc-ticket-head">
+            <span class="sc-ticket-id">{icon_svg("flame", 16)} TICKET SỰ CỐ PRODUCTION · {esc(scenario.ticket_id)}</span>
             <span style="display:inline-flex;align-items:center;gap:0.4rem;">
               <span class="sc-status-badge {sev_cls}">{esc(scenario.severity)}</span>
               <span class="sc-prereq-chip">Liên quan: <b>{esc(scenario.topic)}</b></span>
             </span>
           </div>
-          <div style="font-size:1.08rem;font-weight:700;color:var(--ink);margin-bottom:0.3rem;">{esc(scenario.title)}</div>
-          <div style="font-size:0.9rem;color:var(--ink-secondary);">{esc(scenario.symptom)}</div>
+          <div class="sc-ticket-title">{esc(scenario.title)}</div>
+          <div class="sc-ticket-body">{esc(scenario.symptom)}</div>
         </div>
         """
     )
@@ -1332,27 +619,27 @@ def render_incident_ticket_html(scenario: IncidentScenario) -> str:
 def render_confidence_matrix_html(stats: dict) -> str:
     """Ma trận 2x2 Radar Ảo tưởng Hiểu bài (Confidence Calibration / Dunning-Kruger)."""
     cells = [
-        ("Vững thực chất", "Trả lời Đúng + Tự tin cao/vừa", stats.get("solid_correct", 0), "check-circle", "#15803d", "#ECFDF5", "#A7F3D0"),
-        ("Đúng do đoán mò", "Kiến thức giả · Chọn 'Đoán mò' — cần ôn lại", stats.get("lucky_guess", 0), "clock", "#B45309", "#FFFBEB", "#FDE68A"),
-        ("Điểm mù tự tin sai", "Nguy hiểm nhất · Tự tin chắc chắn nhưng Sai", stats.get("blind_spot", 0), "shield-alert", "#B91C1C", "#FEF2F2", "#FECACA"),
-        ("Biết mình chưa biết", "Trả lời Sai/Bỏ trống + Tự nhận chưa chắc", stats.get("aware_gap", 0), "search-check", "#475569", "#F1F5F9", "#CBD5E1"),
+        ("Vững thực chất", "Trả lời Đúng + Tự tin cao/vừa", stats.get("solid_correct", 0), "check-circle", "mastered"),
+        ("Đúng do đoán mò", "Kiến thức giả · Chọn 'Đoán mò' — cần ôn lại", stats.get("lucky_guess", 0), "clock", "learning"),
+        ("Điểm mù tự tin sai", "Nguy hiểm nhất · Tự tin chắc chắn nhưng Sai", stats.get("blind_spot", 0), "shield-alert", "misconception"),
+        ("Biết mình chưa biết", "Trả lời Sai/Bỏ trống + Tự nhận chưa chắc", stats.get("aware_gap", 0), "search-check", "unseen"),
     ]
     cards = []
-    for title, desc, val, ic, fg, bg, bd in cells:
+    for title, desc, val, ic, tone in cells:
         cards.append(
-            f'<div style="background:{bg};border:1px solid {bd};border-radius:14px;padding:0.8rem 0.95rem;">'
-            f'<div style="display:flex;justify-content:space-between;align-items:center;gap:0.6rem;color:{fg};font-weight:700;font-size:0.86rem;">'
+            f'<div class="sc-matrix-cell" style="background:var(--{tone}-bg);border-color:var(--{tone}-bd);">'
+            f'<div class="sc-matrix-head" style="color:var(--{tone}-fg);">'
             f'<span style="display:inline-flex;align-items:center;gap:0.4rem;">{icon_svg(ic, 16)} {esc(title)}</span>'
-            f'<span style="font-family:\'Newsreader\',serif;font-size:1.45rem;white-space:nowrap;">{val}</span>'
-            f'</div>'
-            f'<div style="font-size:0.8rem;color:var(--ink-secondary);margin-top:4px;">{esc(desc)}</div>'
-            f'</div>'
+            f'<span class="sc-matrix-num">{val}</span>'
+            f"</div>"
+            f'<div class="sc-matrix-desc">{esc(desc)}</div>'
+            f"</div>"
         )
     inner = "".join(cards)
     return clean_html(
         f"""
-        <div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:14px;padding:0.9rem 1.05rem;margin-bottom:0.75rem;box-shadow:var(--card-shadow);">
-          <div style="font-size:0.92rem;font-weight:700;color:var(--brand-deep);margin-bottom:0.55rem;">Radar Ảo tưởng Hiểu bài (Đo độ lệch giữa Tự tin và Thực lực)</div>
+        <div class="sc-panel">
+          <div class="sc-panel-title">Radar ảo tưởng hiểu bài (độ lệch giữa tự tin và thực lực)</div>
           <div class="sc-matrix-grid">{inner}</div>
         </div>
         """

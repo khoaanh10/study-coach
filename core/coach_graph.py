@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import re
 import time
-import weakref
 from pathlib import Path
 from typing import Iterator, Literal, TypedDict
 

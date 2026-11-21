@@ -1,8 +1,11 @@
-"""Đọc văn bản từ file upload (PDF hoặc TXT) và giữ cấu trúc [Trang n] / [Mục n] cho RAG."""
+"""Đọc văn bản từ file upload (PDF, DOCX, PPTX, TXT, MD) và giữ cấu trúc [Trang n] / [Mục n] cho RAG."""
 from __future__ import annotations
 
+import posixpath
 import re
+import zipfile
 from io import BytesIO
+from xml.etree import ElementTree
 
 from pypdf import PdfReader
 
@@ -12,8 +15,143 @@ _PAGE_SPLIT_RE = re.compile(r"(\[Trang\s+\d+\])")
 _NUMBERED_HEADING_RE = re.compile(r"(?m)^(\d+\.\s+[^\n]{2,80})$")
 
 
+SUPPORTED_EXTENSIONS = ("pdf", "docx", "pptx", "txt", "md")
+_MAX_XML_BYTES = 40 * 1024 * 1024  # chặn file nén "bom" trong DOCX/PPTX
+_W_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+_A_NS = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+_P_NS = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
+_R_NS = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+
+
+def _open_office_zip(filename: str, data: bytes, kind: str) -> zipfile.ZipFile:
+    try:
+        return zipfile.ZipFile(BytesIO(data))
+    except zipfile.BadZipFile as e:
+        raise ValueError(
+            f"Không đọc được file {filename}: không phải file {kind} hợp lệ (file hỏng, có mật khẩu, "
+            f"hoặc là định dạng cũ .doc/.ppt). Hãy lưu lại dưới dạng {kind} rồi tải lên."
+        ) from e
+
+
+def _read_office_xml(zf: zipfile.ZipFile, member: str, filename: str) -> ElementTree.Element | None:
+    try:
+        info = zf.getinfo(member)
+    except KeyError:
+        return None
+    if info.file_size > _MAX_XML_BYTES:
+        raise ValueError(f"File {filename} quá lớn để xử lý (một phần nội dung vượt 40 MB sau khi giải nén).")
+    raw = zf.read(member)
+    if b"<!DOCTYPE" in raw or b"<!ENTITY" in raw:
+        # Office Open XML không dùng DTD; chặn để tránh tấn công mở rộng thực thể XML.
+        raise ValueError(f"File {filename} chứa nội dung XML không hợp lệ.")
+    try:
+        return ElementTree.fromstring(raw)
+    except ElementTree.ParseError as e:
+        raise ValueError(f"Không đọc được file {filename}: nội dung bên trong bị hỏng.") from e
+
+
+def _docx_paragraph_text(par: ElementTree.Element) -> str:
+    parts: list[str] = []
+    for node in par.iter():
+        if node.tag == f"{_W_NS}t":
+            parts.append(node.text or "")
+        elif node.tag == f"{_W_NS}tab":
+            parts.append(" ")
+        elif node.tag in (f"{_W_NS}br", f"{_W_NS}cr"):
+            parts.append("\n")
+    return "".join(parts).strip()
+
+
+def _load_docx(filename: str, data: bytes) -> str:
+    """Đọc văn bản Word (.docx) bằng thư viện chuẩn: mỗi đoạn một khối, tiêu đề (Heading) mở đầu một mục."""
+    with _open_office_zip(filename, data, ".docx") as zf:
+        root = _read_office_xml(zf, "word/document.xml", filename)
+    if root is None:
+        raise ValueError(f"File {filename} không phải tài liệu Word (.docx) hợp lệ.")
+    blocks: list[str] = []
+    for par in root.iter(f"{_W_NS}p"):
+        text = _docx_paragraph_text(par)
+        if not text:
+            continue
+        style = par.find(f"{_W_NS}pPr/{_W_NS}pStyle")
+        style_val = (style.get(f"{_W_NS}val", "") if style is not None else "").lower()
+        is_heading = style_val.startswith(("heading", "title", "tiu")) or bool(re.match(r"^(h|heading)\d$", style_val))
+        if is_heading:
+            # Tiêu đề gắn liền đoạn ngay sau nó để mỗi mục có tên chủ đề ở dòng đầu.
+            blocks.append("\x00" + text)
+        else:
+            blocks.append(text)
+    if not blocks:
+        raise ValueError(
+            f"File {filename} không có nội dung chữ (có thể chỉ gồm hình ảnh). "
+            "Hãy dùng file có văn bản, hoặc dán nội dung trực tiếp."
+        )
+    out: list[str] = []
+    pending_heading = ""
+    for b in blocks:
+        if b.startswith("\x00"):
+            if pending_heading:
+                out.append(pending_heading)
+            pending_heading = b[1:]
+        elif pending_heading:
+            out.append(f"{pending_heading}\n{b}")
+            pending_heading = ""
+        else:
+            out.append(b)
+    if pending_heading:
+        out.append(pending_heading)
+    return "\n\n".join(out)
+
+
+def _pptx_slide_order(zf: zipfile.ZipFile, filename: str) -> list[str]:
+    """Danh sách file slide theo đúng thứ tự trình chiếu (đọc presentation.xml), dự phòng theo số trong tên file."""
+    names = set(zf.namelist())
+    ordered: list[str] = []
+    pres = _read_office_xml(zf, "ppt/presentation.xml", filename)
+    rels = _read_office_xml(zf, "ppt/_rels/presentation.xml.rels", filename)
+    if pres is not None and rels is not None:
+        targets = {r.get("Id"): r.get("Target", "") for r in rels}
+        for sld in pres.iter(f"{_P_NS}sldId"):
+            target = targets.get(sld.get(f"{_R_NS}id"), "")
+            if not target:
+                continue
+            path = target.lstrip("/") if target.startswith("/") else posixpath.normpath(posixpath.join("ppt", target))
+            if path in names:
+                ordered.append(path)
+    if not ordered:
+        slides = [n for n in names if re.fullmatch(r"ppt/slides/slide\d+\.xml", n)]
+        ordered = sorted(slides, key=lambda n: int(re.search(r"(\d+)\.xml$", n).group(1)))
+    return ordered
+
+
+def _load_pptx(filename: str, data: bytes) -> str:
+    """Đọc slide PowerPoint (.pptx): mỗi slide thành một [Trang n] để trích nguồn theo số slide."""
+    parts: list[str] = []
+    with _open_office_zip(filename, data, ".pptx") as zf:
+        slide_paths = _pptx_slide_order(zf, filename)
+        if not slide_paths:
+            raise ValueError(f"File {filename} không phải bản trình chiếu PowerPoint (.pptx) hợp lệ.")
+        for i, path in enumerate(slide_paths, start=1):
+            root = _read_office_xml(zf, path, filename)
+            if root is None:
+                continue
+            lines = []
+            for par in root.iter(f"{_A_NS}p"):
+                line = "".join(t.text or "" for t in par.iter(f"{_A_NS}t")).strip()
+                if line:
+                    lines.append(line)
+            if lines:
+                parts.append(f"[Trang {i}]\n" + "\n".join(lines))
+    if not parts:
+        raise ValueError(
+            f"File {filename} không có chữ trên slide nào (có thể toàn hình ảnh). "
+            "Hãy dùng bản trình chiếu có văn bản, hoặc dán nội dung trực tiếp."
+        )
+    return "\n\n".join(parts)
+
+
 def load_text(filename: str, data: bytes) -> str:
-    """Trả về văn bản. PDF có đánh dấu [Trang n] để sau này trích nguồn."""
+    """Trả về văn bản. PDF/PPTX có đánh dấu [Trang n] để sau này trích nguồn."""
     name = filename.lower()
     if name.endswith(".pdf"):
         try:
@@ -25,18 +163,30 @@ def load_text(filename: str, data: bytes) -> str:
             ) from e
         parts = []
         for i, page in enumerate(pages, start=1):
-            text = (page.extract_text() or "").strip()
+            try:
+                text = (page.extract_text() or "").strip()
+            except Exception:
+                text = ""
             if text:
                 parts.append(f"[Trang {i}]\n{text}")
         if not parts:
             raise ValueError(
-                f"File {filename} không có lớp chữ (có thể là PDF scan hoặc ảnh chụp). "
-                "Hãy dùng PDF có chữ chọn được, hoặc dán văn bản trực tiếp."
+                f"File {filename} là PDF dạng ảnh quét (scan): cả {len(pages)} trang đều không có lớp chữ "
+                "nên không trích được nội dung. Hãy chạy nhận dạng chữ (OCR) cho file trước, "
+                "dùng bản PDF có chữ bôi đen/chọn được, hoặc dán văn bản trực tiếp ở thẻ «Dán nội dung»."
             )
         return "\n\n".join(parts)
-    if name.endswith(".txt"):
+    if name.endswith(".docx"):
+        return _load_docx(filename, data)
+    if name.endswith(".pptx"):
+        return _load_pptx(filename, data)
+    if name.endswith((".doc", ".ppt")):
+        raise ValueError(
+            f"File {filename} là định dạng Office cũ (.doc/.ppt). Hãy mở và lưu lại thành .docx / .pptx rồi tải lên."
+        )
+    if name.endswith((".txt", ".md")):
         return data.decode("utf-8", errors="replace")
-    raise ValueError("Chỉ hỗ trợ file .pdf hoặc .txt")
+    raise ValueError("Chỉ hỗ trợ file .pdf, .docx, .pptx, .txt hoặc .md")
 
 
 def _extract_sections_for_file(filename: str, text: str) -> list[dict]:
