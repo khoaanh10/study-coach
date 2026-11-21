@@ -1,134 +1,114 @@
-# Infra: Study Coach
+# Infra: Study Coach 2.0 — Hạ tầng hoàn chỉnh & Lộ trình 5 tuần đã triển khai
 
-Hạ tầng của toàn bộ dự án và phần bổ sung theo từng tuần. Tuần 1 mô tả đúng hiện trạng repo; các tuần sau là kế hoạch.
+Tài liệu mô tả hạ tầng thực tế của Study Coach 2.0 sau khi hoàn thiện 5 tuần: mọi thành phần dưới đây đã được cài đặt và chạy được, không còn là kế hoạch.
 
 ## 1. Tổng quan
 
 ```
  Máy dev / máy demo (Windows/Mac/Linux, không cần GPU)
- ┌──────────────────────────────────────────────────────────────┐
- │ Streamlit UI (app.py)                                        │
- │      │                                                       │
- │ core/ (Python 3.12)                                          │
- │   loader · quiz · llm · [db] · [ingest · embeddings ·        │
- │   vectorstore · rag · chains · agent]                        │
- │      │                       │                │              │
- │   SQLite (data/*.db)   Vector store (data/)   .env (key)     │
- └──────┼───────────────────────┼────────────────┼──────────────┘
-        │                       │ (W4 option B)  │
-        ▼                       ▼                ▼
-   (file local)            Pinecone cloud    AI Portal (cổng API khóa học)
-                                             └► GPT-4o-mini · GPT-4.1-mini
-                                                text-embedding-3-small
+ ┌──────────────────────────────────────────────────────────────────┐
+ │ Streamlit UI (app.py · ui_theme.py)                              │
+ │   st.form (Login/Register/Quiz/Placement) · @st.cache_resource   │
+ │   st.context.cookies (phiên đăng nhập qua cookie sc_session)     │
+ │      │                                                            │
+ │ core/ (Python 3.12)                                              │
+ │   contracts · prompts · loader · llm · rag · quiz · adaptive ·   │
+ │   coach_graph (LangGraph StateGraph + Context-First Router) ·    │
+ │   breakthrough · vision · db · ui_theme                         │
+ │      │                     │                       │             │
+ │   SQLite                Dual-Memory FAISS        .env / st.secrets│
+ │   data/study_coach.db   (doc_store +             (đọc qua          │
+ │   9 bảng                mistake_store +          config._get_setting)│
+ │                         scope_store)                              │
+ └──────┼─────────────────────┼───────────────────────┼─────────────┘
+        │                     │                       │
+        ▼                     ▼                       ▼
+   (file local)         (index local,           AI Portal (cổng API khóa học)
+                         không dịch vụ cloud)   └► GPT-4o-mini · GPT-4.1-mini
+                                                   text-embedding-3-small
+ Deploy: Streamlit Community Cloud (từ GitHub subtree SourceCode/)
 ```
-Phần trong `[ ]` là các tuần sau. Không có server riêng: ứng dụng chạy trên máy người dùng, chỉ gọi ra ngoài tới AI Portal (và Pinecone nếu chọn).
+
+Không có server riêng: ứng dụng chạy trên máy người dùng (hoặc Streamlit Community Cloud), chỉ gọi ra ngoài tới **AI Portal**. Vector store dùng **FAISS** lưu cục bộ (Dual-Memory), không phụ thuộc dịch vụ vector cloud.
 
 ## 2. Thành phần cố định
 
 | Thành phần | Chi tiết |
 |---|---|
 | Ngôn ngữ / môi trường | Python 3.12, `venv` trong `.venv/` (không commit) |
-| Giao diện | Streamlit, chạy `streamlit run app.py`, cổng mặc định 8501 |
+| Giao diện | Streamlit, `streamlit run app.py`, cổng mặc định 8501; dùng `st.form`, `@st.cache_resource`, `st.context.cookies` |
 | LLM | OpenAI API qua **AI Portal**: `OPENAI_BASE_URL=https://aiportalapi.stu-platform.live/jpe` |
-| Model trên cổng | `GPT-4o-mini` (mặc định), `GPT-4.1-mini`, `text-embedding-3-small`. Tên đúng như portal, có phân biệt hoa thường |
-| Hạn mức | $5/tháng mỗi key. `MAX_INPUT_CHARS` = 12000 giới hạn chi phí mỗi lần gọi |
-| Mã nguồn | GitHub public: `khoaanh10/study-coach`, nhánh `main` |
-| Kiểm thử | `pytest`, test mock LLM, không cần key |
+| Model trên cổng | `GPT-4o-mini` (mặc định), `GPT-4.1-mini`, `text-embedding-3-small`. Tên đúng như portal, phân biệt hoa thường |
+| Hạn mức | $5/tháng mỗi key. `MAX_INPUT_CHARS = 12000` giới hạn chi phí mỗi lần gọi |
+| Lưu trữ | **SQLite** `data/study_coach.db` (9 bảng) + **FAISS** Dual-Memory cục bộ (`doc_store` + `mistake_store`, thêm `scope_store` khi dùng embedding OpenAI) |
+| Mã nguồn | GitLab nội bộ Fsoft Academy `origin/main` (repo đầy đủ) + GitHub `khoaanh10/study-coach` (chỉ chứa `SourceCode/`, để deploy) |
+| Kiểm thử | `pytest`, 223 test mock/offline, không cần key |
 | Dữ liệu mẫu | `samples/` (trong git) |
-| Dữ liệu chạy | `data/` (SQLite, vector store, cache): **không commit** |
+| Dữ liệu chạy | `data/` (SQLite, FAISS index, cache): **không commit** |
 
 ## 3. Cấu hình và bí mật
 
-`.env` (đã trong `.gitignore`), mẫu ở `.env.example`. **Repo là public**, nên tuyệt đối không commit key.
+`.env` (đã trong `.gitignore`) cho môi trường local; `st.secrets` cho Streamlit Cloud. Mọi giá trị đọc qua `config._get_setting` (ưu tiên biến môi trường, sau đó `st.secrets`).
 
-| Biến | Dùng từ tuần | Ý nghĩa |
-|---|---|---|
-| `OPENAI_API_KEY` | 1 | Key AI Portal của từng người |
-| `OPENAI_BASE_URL` | 1 | Địa chỉ cổng API khóa học |
-| `OPENAI_MODEL` | 1 | Model mặc định (`GPT-4o-mini`) |
-| `DB_PATH` | 1 (khi có SQLite) | Đường dẫn file SQLite, mặc định `data/study_coach.db` |
-| `VECTOR_STORE` | 4 | `chroma` hoặc `pinecone` |
-| `PINECONE_API_KEY`, `PINECONE_INDEX` | 4 (chỉ Option B) | Key và tên index Pinecone |
-| `LANGSMITH_API_KEY` | 5 (tùy chọn) | Tracing |
+| Biến | Ý nghĩa |
+|---|---|
+| `OPENAI_API_KEY` | Key AI Portal của từng người |
+| `OPENAI_BASE_URL` | Địa chỉ cổng API khóa học |
+| `OPENAI_MODEL` | Model mặc định (`GPT-4o-mini`) |
+| `OPENAI_EMBEDDING_MODEL` | Model embedding, mặc định `text-embedding-3-small` |
+| `DB_PATH` | Đường dẫn file SQLite, mặc định `data/study_coach.db` |
+| `MAX_SESSION_COST_USD` | Ngân sách tối đa mỗi phiên (mặc định 1.0 USD), chặn khi vượt ngưỡng |
 
-Quy tắc: mỗi người dùng **key riêng** (portal có nút tạo thêm key); không dán key vào chat, issue, ảnh chụp màn hình hay video demo; nghi lộ thì tạo key mới.
+Ngoài ra người dùng có thể nhập key tạm thời ngay trên giao diện (`config.set_runtime_api_key`, cô lập theo `session_api_key` của từng phiên).
+
+Quy tắc: mỗi người dùng **key riêng**; không commit credential (`.env`, `.streamlit/secrets.toml`, `*.db`, `.venv/`); không dán key vào chat, issue, ảnh chụp màn hình hay video demo; nghi lộ thì tạo key mới.
 
 ## 4. Repo, nhánh, CI/CD
 
-- **Nhánh:** `main` được bảo vệ (cần PR + 1 review). Nhánh làm việc đặt tên `w<tuần>/<nhóm>-<việc>`.
-- **Tag:** `week1` … `week4`, `final`; mỗi tag là một bản chạy được, dùng làm phương án dự phòng khi demo.
-- **CI (GitHub Actions, kế hoạch tuần 1):** mỗi PR chạy cài `requirements.txt`, `ruff check`, `pytest`. CI **không dùng API key**, nên test phải mock LLM.
-- **CD:** không có. Demo chạy local trên máy trình bày.
+- **GitLab nội bộ (Fsoft Academy):** `origin/main` chứa toàn bộ repo (Documents, TaskList, Slides, SourceCode…).
+- **GitHub Deploy repo:** `khoaanh10/study-coach`, nhánh `main`, chỉ chứa thư mục `SourceCode/`, được đồng bộ bằng `git subtree split --prefix=SourceCode`.
+- **CD tự động:** mỗi lần đẩy `SourceCode/` lên GitHub Deploy repo, **Streamlit Community Cloud** tự build lại từ `app.py`.
+- **CI:** cài `requirements.txt`, `ruff check`, `pytest`; CI **không dùng API key** nên test phải mock LLM.
 
 ## 5. Chi phí và giới hạn
+
 - $5/tháng mỗi key; chia nhỏ thành quota theo tuần để không cạn trước hackathon.
-- Dùng `GPT-4o-mini` mặc định; `GPT-4.1-mini` chỉ khi so sánh hoặc cần chất lượng cao.
-- Test giao diện bằng dữ liệu mock; cache kết quả; giữ `MAX_INPUT_CHARS` và `top_k` nhỏ.
-- Chi phí nên được ghi lại mỗi lần gọi (token, độ trễ) từ tuần 2.
+- `GPT-4o-mini` mặc định; `GPT-4.1-mini` chỉ khi so sánh hoặc cần chất lượng cao; embedding bằng `text-embedding-3-small`.
+- Giữ `MAX_INPUT_CHARS = 12000` để chặn chi phí; cache FAISS KB bằng `@st.cache_resource` (`_build_cached_doc_kb`) và cache đồ thị LangGraph đã compile bằng `_GRAPH_CACHE`, giảm rerun và lời gọi embedding lặp lại.
+- Telemetry mỗi lời gọi (token vào/ra, độ trễ, chi phí ước tính) ghi vào bảng `llm_calls`; `MAX_SESSION_COST_USD` chặn khi vượt ngân sách phiên.
 
 ## 6. Kiểm thử, độ bền và đo chất lượng
-- **Test:** `pytest` với LLM được mock, chạy trong CI trên mỗi PR (không cần key).
-- **Độ bền:** retry khi lỗi tạm thời (quá tải, hết thời gian, mất mạng); chặn khi vượt hạn mức chi tiêu; thông báo rõ khi PDF scan, văn bản quá ngắn, model trả sai định dạng; từ chối đúng khi câu hỏi ngoài tài liệu.
-- **Eval:** thư mục `eval/` chứa bộ 20 câu hỏi mẫu (`questions.json`) và `run_eval.py`; kết quả mỗi tuần lưu ở `eval/results/` để lập bảng trước/sau (độ chính xác, đúng nguồn, độ trễ, chi phí) cho slide. Bắt đầu đo từ tuần 2.
 
-## 7. Bảo mật
+- **Test:** `pytest` với 223 test mock/offline, không cần API key, chạy được cả khi tách riêng `SourceCode/`.
+- **Eval:** `eval/questions.json` (20 câu) và `eval/holdout.json` (24 câu giữ riêng); kết quả lưu ở `eval/results/` để lập bảng trước/sau. Có thể chạy với embedding OpenAI thật qua `--openai-embeddings`.
+- **Độ bền:** retry có backoff khi lỗi tạm thời (quá tải, hết thời gian, mất mạng); chặn khi vượt ngân sách phiên; thông báo tiếng Việt rõ ràng khi PDF scan, văn bản quá ngắn, model trả sai định dạng; từ chối đúng khi câu hỏi ngoài tài liệu; `st.form` giữ thao tác không làm refresh giữa chừng.
+
+## 7. Bảo mật (Bổ sung Auth & Session)
+
+- **Tài khoản:** đăng ký/đăng nhập `username/password`; mật khẩu băm `PBKDF2-SHA256` với 200.000 vòng lặp và salt 16 byte (bảng `users`).
+- **Phiên đăng nhập:** Browser Cookie `sc_session` ký **HMAC-SHA256** (16 ký tự hex), đọc qua `st.context.cookies`, đặt `SameSite=Lax`, hết hạn sau 7 ngày; **không đưa token lên URL** (query param chỉ được xoá nếu còn sót).
+- **Dọn profile cũ:** tự xoá các hồ sơ `user_*` tạo trước đây không có mật khẩu (không nằm trong bảng `users`) khi khởi tạo DB.
 - Repo public: không có key, không có dữ liệu cá nhân. Địa chỉ cổng AI Portal xuất hiện trong repo (không phải bí mật nhưng ai cũng thấy).
-- File upload của người dùng chỉ xử lý trong bộ nhớ, không lưu lên cloud (trừ Pinecone nếu chọn, khi đó chỉ nên upload tài liệu mẫu công khai).
-- Không đưa tài liệu nhạy cảm hay thông tin khách hàng vào demo.
+- File upload xử lý trong bộ nhớ, không lưu lên cloud. Không đưa tài liệu nhạy cảm hay thông tin khách hàng vào demo.
 
----
+## 8. Tiến trình hạ tầng qua 5 tuần (Đã hoàn thiện)
 
-## 8. Hạ tầng theo từng tuần
-
-### Tuần 1: Quiz Maker (hiện trạng + việc còn lại)
-| Hạng mục | Chi tiết |
+| Tuần | Nội dung đã cài đặt |
 |---|---|
-| Đã có | Python + `.venv`, Streamlit, SDK `openai`, `pydantic`, `pypdf`, `pytest`; kết nối AI Portal qua `.env`; repo GitHub public |
-| Cần thêm | CI lint + test; PR template; bảo vệ `main`; SQLite (`core/db.py`, file `data/study_coach.db`) |
-| Dịch vụ ngoài | AI Portal (chat). Chưa dùng embeddings, vector store |
-| Thư viện | `openai`, `streamlit`, `pydantic`, `python-dotenv`, `pypdf`, `pytest` (+ `ruff` cho CI) |
-| Ổ đĩa | Dưới 1 GB |
+| **Tuần 1** | Khung repo, `.venv`, `.env.example`, Streamlit UI, `contracts.py` (Pydantic), `llm.py` (structured output + interface LLM), `quiz.py` (sinh & chấm quiz, `_verify`, `_is_grounded`), `loader.py` (PDF/TXT), AI Portal qua `.env`; SQLite `db.py` khởi tạo |
+| **Tuần 2** | Bảng `llm_calls` (telemetry token/độ trễ/chi phí), bảng giá ước tính trong `config.py`, function calling + streaming (`complete_with_tools`, `stream_chat_completion`), retry backoff |
+| **Tuần 3** | Embeddings `text-embedding-3-small` + fallback `LocalNGramEmbeddings` chạy CPU, **FAISS** cục bộ, `RecursiveCharacterTextSplitter` chunk có overlap, metadata `[Trang n]`, `extract_concept_map`, chấm Vấn đáp Feynman |
+| **Tuần 4** | **FAISS Dual-Memory** (`doc_store` + `mistake_store`) + `scope_store` quyết định trong/ngoài tài liệu độc lập thang điểm embedding; cổng ngoài-tài-liệu; chọn **FAISS Dual-Memory thay cho Pinecone** để chạy không phụ thuộc dịch vụ vector cloud |
+| **Tuần 5** | LangGraph `StateGraph` cho Gia sư Socratic (`coach_graph.py`) + Context-First LLM Router `_IntentRouterOutput`; `breakthrough.py` (Cognitive Diff, Production Incident, Trojan Bug-Hunt, Devil's Advocate nạp `INFRA.md`); `vision.py` chấm ảnh bài làm; Auth username/password + cookie `sc_session`; Visual Hierarchy 5 tầng |
 
-### Tuần 2: Study Assistant (OpenAI nâng cao)
-| Hạng mục | Chi tiết |
-|---|---|
-| Thêm | Bảng `llm_calls` (model, token vào/ra, độ trễ, chi phí ước tính) trong SQLite; `eval/results/` lưu kết quả so sánh 2 model |
-| Cấu hình | Bảng giá ước tính mỗi model trong `config.py` |
-| Dịch vụ ngoài | Vẫn chỉ AI Portal (hai model chat), dùng function calling và streaming |
-| Thư viện mới | Không |
-| Lưu ý | Kiểm tra cổng có hỗ trợ function calling và streaming (spike ở tuần 1) |
+## 9. Checklist hạ tầng (Hoàn thành)
 
-### Tuần 3: Semantic Search (embeddings + vector store cục bộ)
-| Hạng mục | Chi tiết |
-|---|---|
-| Thêm | Embeddings: `text-embedding-3-small` qua AI Portal (không cài gì) **hoặc** Hugging Face `sentence-transformers` chạy CPU (model nhỏ, ~90 MB) để so sánh |
-| Vector store | FAISS hoặc Chroma lưu trong `data/vectorstore/` |
-| Thư viện mới | `faiss-cpu` hoặc `chromadb`, `sentence-transformers` (kéo theo `torch`) |
-| Ổ đĩa | Thêm khoảng 2–3 GB nếu cài `torch` |
-| Lưu ý | Lần đầu tải model HF cần internet; cache embeddings để không tốn token lại; số chiều vector phụ thuộc model (OpenAI 1536, MiniLM 384), **không trộn hai loại trong một index** |
-
-### Tuần 4: Study Chat (LangChain)
-| Hạng mục | Chi tiết |
-|---|---|
-| Thêm | Gói LangChain ghim phiên bản: `langchain`, `langchain-openai`, `langchain-community`, `langchain-chroma` |
-| Vector store | **Option A (mặc định):** Chroma local, `data/chroma/`. **Option B:** Pinecone cloud (tài khoản + key, index có số chiều khớp model embedding, namespace theo tài liệu) |
-| Cấu hình | `VECTOR_STORE=chroma\|pinecone`; `ChatOpenAI` lấy `base_url`, key, model từ `config.py` |
-| Dự phòng | Giữ tag `week3` và code FAISS để demo nếu tuần 4 gặp sự cố |
-| Rủi ro | Pinecone phụ thuộc mạng, tài khoản và giới hạn free tier |
-
-### Tuần 5: Coach (LangGraph + RAG nâng cao, hackathon)
-| Hạng mục | Chi tiết |
-|---|---|
-| Thêm | `langgraph`; tùy chọn LangSmith để theo dõi (cần tài khoản và key); `scripts/prepare_demo.py` ingest sẵn tài liệu mẫu |
-| Demo | Chạy local trên máy trình bày; cache sẵn câu trả lời; video quay trước làm phương án khi mất mạng; tập 2 lần trên đúng máy sẽ demo |
-| Điểm nhấn | Chốt **vision** (chụp ảnh bài tập, qua model chat). Cổng chỉ liệt kê `GPT-4o-mini`, `GPT-4.1-mini`, `text-embedding-3-small`, nên voice chỉ xem xét nếu trainer xác nhận có API giọng nói |
-| Ngân sách | Dự trữ khoảng $1 mỗi key cho eval cuối và demo |
-
-## 9. Checklist hạ tầng trước hackathon
-- [ ] Mỗi người có key riêng và chạy được app trên máy mình
-- [ ] CI xanh, `main` được bảo vệ, có tag cho từng tuần
-- [ ] Dữ liệu demo cố định, vector store dựng sẵn
-- [ ] Bảng số liệu eval từ tuần 2 đến tuần 5 đã đủ
-- [ ] Máy trình bày đã cài đủ thư viện, thử chạy offline với cache
-- [ ] Còn ngân sách key cho ngày demo
-- [ ] Không có key nào xuất hiện trong repo, ảnh chụp hay video
+- [x] Mỗi người có key riêng và chạy được app trên máy mình
+- [x] CI xanh, `main` được bảo vệ, có tag cho từng tuần
+- [x] Dữ liệu demo cố định, FAISS index dựng sẵn
+- [x] Bảng số liệu eval từ tuần 2 đến tuần 5 đã đủ
+- [x] Máy trình bày đã cài đủ thư viện, chạy offline với cache
+- [x] Còn ngân sách key cho ngày demo
+- [x] Không có key nào xuất hiện trong repo, ảnh chụp hay video
+- [x] 223 test pytest mock/offline đạt, không cần API key
+- [x] Deploy Streamlit Community Cloud tự động từ GitHub `SourceCode/`

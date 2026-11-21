@@ -532,10 +532,12 @@ def test_18_learner_level_progression_no_single_concept_jump_and_placement_sync(
     dna_unblocked = db.get_learner_dna("me", db.DEFAULT_DOC_ID, names, db_path=db_file)
     assert dna_unblocked.overall_level == "Nâng cao"
 
-    # 3. Placement Test 3/3 -> recommended_level & DNA overall_level đồng bộ thành Nâng cao
+    # 3. Placement Test phủ khái niệm -> recommended_level & DNA overall_level đồng bộ thành Nâng cao / Trung bình
     text, _, _ = load_default_samples()
     placement = adaptive.generate_placement_test(text, cmap, demo_mode=True)
-    assert len({adaptive._match_concept_name(q.topic, names) for q in placement.questions}) == 3
+    expected_n = adaptive.placement_question_count(len(names), len(text))
+    assert len(placement.questions) == expected_n
+    assert len({adaptive._match_concept_name(q.topic, names) for q in placement.questions}) >= min(3, expected_n)
 
     res_perfect = grade(placement, [q.correct_index for q in placement.questions])
     assert res_perfect.recommended_level == "Nâng cao"
@@ -545,7 +547,12 @@ def test_18_learner_level_progression_no_single_concept_jump_and_placement_sync(
     )
     assert dna_placed.overall_level == "Nâng cao"
 
-    res_mid = grade(placement, [placement.questions[0].correct_index, placement.questions[1].correct_index, (placement.questions[2].correct_index + 1) % 4])
+    n_mid = max(1, (len(placement.questions) * 2 + 1) // 3)
+    mid_answers = [
+        q.correct_index if i < n_mid else (q.correct_index + 1) % 4
+        for i, q in enumerate(placement.questions)
+    ]
+    res_mid = grade(placement, mid_answers)
     assert res_mid.recommended_level == "Trung bình"
     dna_mid = adaptive.record_quiz_outcome(
         "mid_learner", db.DEFAULT_DOC_ID, res_mid, model="Offline-Demo", difficulty="Chẩn đoán", concepts_order=names, db_path=db_file
